@@ -236,8 +236,12 @@ class StorageTests(unittest.TestCase):
             contents = {name: archive.read(name) for name in archive.namelist()}
         database = self.root / "tampered.sqlite3"
         database.write_bytes(contents["database.sqlite3"])
-        with sqlite3.connect(database) as connection:
-            connection.execute(sql, parameters)
+        connection = sqlite3.connect(database)
+        try:
+            with connection:
+                connection.execute(sql, parameters)
+        finally:
+            connection.close()
         contents["database.sqlite3"] = database.read_bytes()
         manifest = json.loads(contents["manifest.json"])
         manifest["files"]["database.sqlite3"] = hashlib.sha256(contents["database.sqlite3"]).hexdigest()

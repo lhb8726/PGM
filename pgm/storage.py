@@ -418,8 +418,11 @@ class Store:
         path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="pgm-backup-") as directory:
             snapshot = Path(directory) / "database.sqlite3"
-            with sqlite3.connect(snapshot) as destination:
+            destination = sqlite3.connect(snapshot)
+            try:
                 self._conn.backup(destination)
+            finally:
+                destination.close()
             entries = [("database.sqlite3", snapshot)]
             for item in sorted(self.attachments_dir.rglob("*")):
                 if item.is_symlink():
