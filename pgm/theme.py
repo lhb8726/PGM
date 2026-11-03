@@ -53,6 +53,9 @@ def apply_theme(app, light=False):
     QHeaderView::section { background: INPUT; color: MUTED; border: none; border-bottom: 1px solid LINE; padding: 9px; }
     QStatusBar { background: BG; color: MUTED; font-size: 11px; }
     QDialog { background: BG; }
+    QTabWidget::pane { border: 1px solid LINE; border-radius: 6px; }
+    QTabBar::tab { background: INPUT; color: MUTED; border: 1px solid LINE; padding: 9px 14px; }
+    QTabBar::tab:selected { color: TEXT; background: SELECTED; border-bottom: 2px solid ACCENT; }
     QToolTip { background: PANEL; color: TEXT; border: 1px solid LINE; padding: 6px; }
     """
     for key,val in {"SELECTED":c["selected"],"ACCENT":c["accent"],"MUTED":c["muted"],"PANEL":c["panel"],"INPUT":c["input"],"TEXT":c["text"],"SIDE":c["sidebar"],"LINE":c["line"],"BG":c["bg"]}.items():

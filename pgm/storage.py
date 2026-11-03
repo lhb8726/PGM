@@ -20,6 +20,8 @@ from typing import Any
 from uuid import uuid4
 import zipfile
 
+from .planning_schema import normalize_planning
+
 
 CATEGORIES = {"finance", "career", "learning", "health", "life", "habits"}
 SCHEMA_VERSION = 1
@@ -140,6 +142,7 @@ def _goal(data: dict) -> dict:
         "criteria": _text(data.get("criteria", ""), "완료 기준"),
         "status": _choice(data.get("status", "active"), {"active", "completed"}, "상태"),
         "created_at": _timestamp(data.get("created_at", _now()), "생성 시각"),
+        "planning": normalize_planning(data.get("planning")),
     }
 
 
@@ -162,6 +165,10 @@ def _task(data: dict, goal_ids: set[int]) -> dict:
         "stage": _text(data.get("stage", "실행"), "단계", limit=200),
         "position": _integer(data.get("position", 0), "정렬 순서", 0, 100000),
         "completed_at": _timestamp(completed_at, "완료 시각", optional=True),
+        "done_when": _text(data.get("done_when", ""), "과제 완료 기준", limit=2000),
+        "rationale": _text(data.get("rationale", ""), "과제 제안 이유", limit=2000),
+        "analysis_key": _text(data.get("analysis_key", ""), "분석 과제 연결", limit=200),
+        "not_before": _date(data.get("not_before", ""), "과제 시작 가능일", optional=True),
     }
 
 
@@ -254,8 +261,18 @@ class Store:
             self._conn.execute("UPDATE profile SET data = ? WHERE id = 1", (_json(value),))
 
     def _rows(self, table: str) -> list[dict]:
-        return [{**json.loads(row["data"]), "id": row["id"]}
-                for row in self._conn.execute(f"SELECT id, data FROM {table} ORDER BY id")]
+        rows = []
+        for row in self._conn.execute(f"SELECT id, data FROM {table} ORDER BY id"):
+            value = json.loads(row["data"])
+            if table == "goals":
+                value["planning"] = normalize_planning(value.get("planning"))
+            elif table == "tasks":
+                value.setdefault("done_when", "")
+                value.setdefault("rationale", "")
+                value.setdefault("analysis_key", "")
+                value.setdefault("not_before", "")
+            rows.append({**value, "id": row["id"]})
+        return rows
 
     def _existing(self, table: str, record_id: Any) -> dict:
         record_id = _integer(record_id, "항목 ID", 1)
@@ -488,7 +505,18 @@ class Store:
                         if count > 100000 or not isinstance(row["id"], int) or row["id"] <= 0:
                             raise ValueError("백업 항목 수 또는 ID가 올바르지 않습니다.")
                         value = json.loads(row["data"])
-                        if not isinstance(value, dict) or validator(value) != value:
+                        compatible = dict(value) if isinstance(value, dict) else value
+                        if isinstance(compatible, dict):
+                            # These fields were added to JSON records in v0.2;
+                            # v0.1 archives keep their original schema and hashes.
+                            if table == "goals":
+                                compatible.setdefault("planning", normalize_planning())
+                            elif table == "tasks":
+                                compatible.setdefault("done_when", "")
+                                compatible.setdefault("rationale", "")
+                                compatible.setdefault("analysis_key", "")
+                                compatible.setdefault("not_before", "")
+                        if not isinstance(value, dict) or validator(value) != compatible:
                             raise ValueError("백업 항목 값이 올바르지 않습니다.")
                         if table == "tasks" and row["goal_id"] != value["goal_id"]:
                             raise ValueError("백업의 목표 연결이 올바르지 않습니다.")

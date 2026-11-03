@@ -10,6 +10,7 @@ import unittest
 import zipfile
 
 from pgm.storage import Store
+from pgm.planning_schema import normalize_planning
 
 
 class StorageTests(unittest.TestCase):
@@ -51,6 +52,83 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(goal["title"], "수정한 가상 목표")
         self.assertEqual(goal["criteria"], "가상 결과물 완성")
         self.assertEqual(goal["due_date"], "2027-01-31")
+
+    def test_planning_context_and_task_explanation_survive_restart_and_backup(self):
+        goal_id = self.goal()
+        planning = normalize_planning({
+            "context": "가상 학습 목표", "requirements": "문제 풀이와 설명 문서",
+            "evidence": "가상 사전 평가", "estimated_hours": 18,
+            "weekly_hours": 2.5, "monthly_cost": 0,
+            "reference_url": "https://example.com/synthetic-standard",
+            "monthly_contribution": 75000, "contribution_source": "가상 별도 수입",
+            "contribution_confirmed": True, "target_basis": "after_tax_cash",
+            "tax_cost_basis": 900000, "tax_assumptions_confirmed": True,
+        })
+        self.store.save_goal({"id": goal_id, "planning": planning})
+        self.store.save_task({"goal_id": goal_id, "title": "가상 실행 항목",
+                              "done_when": "설명 문서와 결과를 확인", "rationale": "기준과 현재 결과물의 차이를 확인",
+                              "analysis_key": "synthetic:1:2", "not_before": "2027-01-05"})
+        archive = self.store.export_backup(self.root / "planning.pgmbackup")
+        self.store.close()
+        self.store = Store(self.root / "application")
+        self.assertEqual(self.store.goals()[0]["planning"], planning)
+        self.assertEqual(self.store.tasks()[0]["done_when"], "설명 문서와 결과를 확인")
+        self.store.save_goal({"id": goal_id, "planning": normalize_planning()})
+        self.store.restore_backup(archive)
+        self.assertEqual(self.store.goals()[0]["planning"], planning)
+        self.assertEqual(self.store.tasks()[0]["rationale"], "기준과 현재 결과물의 차이를 확인")
+        self.assertEqual(self.store.tasks()[0]["analysis_key"], "synthetic:1:2")
+        self.assertEqual(self.store.tasks()[0]["not_before"], "2027-01-05")
+
+    def test_legacy_v01_records_and_archive_get_optional_defaults_without_data_loss(self):
+        goal_id = self.goal()
+        task_id = self.store.save_task({"goal_id": goal_id, "title": "가상 기존 과제"})
+        goal = {k: v for k, v in self.store.goals()[0].items() if k not in {"id", "planning"}}
+        task = {k: v for k, v in self.store.tasks()[0].items() if k not in {"id", "done_when", "rationale", "analysis_key", "not_before"}}
+        with self.store._conn:
+            self.store._conn.execute("UPDATE goals SET data = ? WHERE id = ?", (json.dumps(goal), goal_id))
+            self.store._conn.execute("UPDATE tasks SET data = ? WHERE id = ?", (json.dumps(task), task_id))
+        archive = self.store.export_backup(self.root / "legacy-v01.pgmbackup")
+        self.store.save_goal({"id": goal_id, "title": "복원 전에만 보이는 가상 수정"})
+        self.store.restore_backup(archive)
+        restored = self.store.goals()[0]
+        self.assertEqual(restored["title"], goal["title"])
+        self.assertEqual(restored["planning"], normalize_planning())
+        self.assertIsNone(restored["planning"]["monthly_contribution"])
+        self.assertEqual(self.store.tasks()[0]["done_when"], "")
+        self.assertEqual(self.store.tasks()[0]["rationale"], "")
+        self.assertEqual(self.store.tasks()[0]["analysis_key"], "")
+        self.assertEqual(self.store.tasks()[0]["not_before"], "")
+
+    def test_analysis_task_identity_and_start_date_remain_on_partial_update(self):
+        goal_id = self.goal()
+        task_id = self.store.save_task({"goal_id": goal_id, "title": "가상 후속 단계",
+                                       "analysis_key": "synthetic-goal:phase:action", "not_before": "2027-01-04"})
+        self.store.save_task({"id": task_id, "scheduled_date": "2027-01-06"})
+        self.assertEqual(self.store.tasks()[0]["analysis_key"], "synthetic-goal:phase:action")
+        self.assertEqual(self.store.tasks()[0]["not_before"], "2027-01-04")
+        original = self.store.tasks()
+        with self.assertRaises(ValueError):
+            self.store.save_task({"id": task_id, "not_before": "not-a-date"})
+        self.assertEqual(self.store.tasks(), original)
+
+    def test_invalid_planning_settings_cannot_replace_saved_goal(self):
+        goal_id = self.goal()
+        original = self.store.goals()
+        for planning in [{"tax_rate": 100}, {"weekly_hours": 169}, {"estimated_hours": float("nan")},
+                         {"monthly_contribution": -1}, {"contribution_confirmed": "yes"},
+                         {"reference_url": "javascript:alert(1)"}, {"target_basis": []},
+                         {"unknown_assumption": "not supported"}]:
+            with self.subTest(planning=planning), self.assertRaises(ValueError):
+                self.store.save_goal({"id": goal_id, "planning": planning})
+            self.assertEqual(self.store.goals(), original)
+
+    def test_unknown_and_confirmed_zero_planning_values_are_distinct(self):
+        goal_id = self.goal()
+        self.assertIsNone(self.store.goals()[0]["planning"]["monthly_cost"])
+        self.store.save_goal({"id": goal_id, "planning": {"monthly_cost": 0, "monthly_contribution": 0}})
+        self.assertEqual(self.store.goals()[0]["planning"]["monthly_cost"], 0)
+        self.assertEqual(self.store.goals()[0]["planning"]["monthly_contribution"], 0)
 
     def test_invalid_records_do_not_change_existing_data(self):
         self.store.save_profile({"name": "기존 가상 이름"})

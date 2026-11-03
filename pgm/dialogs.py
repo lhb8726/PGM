@@ -19,12 +19,15 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QStackedWidget,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from .constants import CATEGORIES, HORIZONS, KINDS
+from .planning_schema import normalize_planning
 
 
 def _select(combo: QComboBox, value: Any) -> None:
@@ -68,6 +71,39 @@ def _number(value: float = 0) -> QDoubleSpinBox:
     editor.setGroupSeparatorShown(True)
     editor.setValue(float(value or 0))
     return editor
+
+
+class OptionalNumber(QWidget):
+    """Keep an unconfirmed numerical input distinct from a recorded zero."""
+
+    def __init__(self, value: float | None = None, *, maximum: float = 1e15, decimals: int = 2):
+        super().__init__()
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.known = QCheckBox("입력")
+        self.editor = QDoubleSpinBox()
+        self.editor.setRange(0, maximum)
+        self.editor.setDecimals(decimals)
+        self.editor.setGroupSeparatorShown(True)
+        self.known.setChecked(value is not None)
+        self.editor.setValue(float(value or 0))
+        self.editor.setEnabled(value is not None)
+        self.display = QStackedWidget()
+        self.display.addWidget(self.editor)
+        unknown = QLabel("정보 미입력")
+        unknown.setObjectName("muted")
+        self.display.addWidget(unknown)
+        self.display.setCurrentIndex(0 if value is not None else 1)
+        self.known.toggled.connect(self._toggle)
+        layout.addWidget(self.known)
+        layout.addWidget(self.display, 1)
+
+    def _toggle(self, known: bool) -> None:
+        self.editor.setEnabled(known)
+        self.display.setCurrentIndex(0 if known else 1)
+
+    def value(self) -> float | None:
+        return self.editor.value() if self.known.isChecked() else None
 
 
 class _FormDialog(QDialog):
@@ -174,11 +210,110 @@ class GoalDialog(_FormDialog):
         note.setWordWrap(True)
         note.setObjectName("muted")
         self.form.addRow(note)
+        self._build_planning(g.get("planning"))
         self.kind_input.currentIndexChanged.connect(self._numeric_visibility)
+        self.category_input.currentIndexChanged.connect(self._planning_visibility)
         self.direction_input.currentIndexChanged.connect(self._update_notice)
         self.baseline_input.valueChanged.connect(self._update_notice)
         self.target_input.valueChanged.connect(self._update_notice)
         self._numeric_visibility()
+
+    def _build_planning(self, values: dict | None) -> None:
+        p = normalize_planning(values)
+        self.planning_tabs = QTabWidget()
+        self.planning_tabs.setMinimumHeight(455)
+        context = QWidget()
+        common = QFormLayout(context)
+        common.setContentsMargins(12, 14, 12, 14)
+        common.setVerticalSpacing(10)
+        self.context_input = _text(p["context"], "현재 상황과 목표를 선택한 이유", 52)
+        self.requirements_input = _text(p["requirements"], "공식 시험 기준, 목표 직무 요건, 결과물 필수 항목 등", 52)
+        self.evidence_input = _text(p["evidence"], "시험 결과·현재 결과물·측정 기록과 확인 날짜", 52)
+        self.constraints_input = _text(p["constraints"], "고정 일정, 활동 제약, 예산 조건, 예정된 큰 지출 등", 52)
+        self.reference_input = QLineEdit(p["reference_url"])
+        self.reference_input.setPlaceholderText("https://…  사용자 제공 자료는 자동 검증하지 않습니다")
+        for title, editor in [("현재 상황", self.context_input), ("달성에 필요한 기준", self.requirements_input),
+                              ("현재 수준의 근거", self.evidence_input), ("제약 조건", self.constraints_input),
+                              ("참고 출처 URL", self.reference_input)]:
+            common.addRow(title, editor)
+        self.planning_tabs.addTab(context, "현황·기준")
+        resources = QWidget()
+        allocation = QFormLayout(resources)
+        allocation.setContentsMargins(12, 14, 12, 14)
+        allocation.setVerticalSpacing(14)
+        self.estimated_hours_input = OptionalNumber(p["estimated_hours"], maximum=1e7)
+        self.weekly_hours_input = OptionalNumber(p["weekly_hours"], maximum=168)
+        self.monthly_cost_input = OptionalNumber(p["monthly_cost"], decimals=0)
+        allocation.addRow("남은 작업 예상 총시간 (시간)", self.estimated_hours_input)
+        allocation.addRow("이 목표에 배정할 주당 시간", self.weekly_hours_input)
+        allocation.addRow("이 목표의 월 예상 비용 (원)", self.monthly_cost_input)
+        guidance = QLabel("모르는 수치는 ‘입력’을 해제해 두세요. 확인한 0과 정보 부족을 구분합니다. 남은 작업 시간에는 이미 완료한 시간을 다시 포함하지 않습니다. 주당 시간은 프로필의 전체 가용 시간 중 이 목표에 배정할 몫입니다.")
+        guidance.setWordWrap(True)
+        guidance.setObjectName("muted")
+        allocation.addRow(guidance)
+        self.planning_tabs.addTab(resources, "시간·비용")
+        finance = QWidget()
+        money = QFormLayout(finance)
+        money.setContentsMargins(12, 14, 12, 14)
+        money.setVerticalSpacing(10)
+        self.monthly_contribution_input = OptionalNumber(p["monthly_contribution"], decimals=0)
+        self.contribution_source_input = QLineEdit(p["contribution_source"])
+        self.contribution_source_input.setPlaceholderText("세후 소득·별도 수입 등 신규 납입 재원과 지속 가능 기간")
+        self.contribution_confirmed_input = QCheckBox("지속 가능한 신규 납입 자금임을 확인")
+        self.contribution_confirmed_input.setChecked(p["contribution_confirmed"])
+        self.target_basis_input = _choices({"account_value": "계좌 평가액", "after_tax_cash": "세후 사용 가능한 현금"}, p["target_basis"])
+        self.tax_cost_basis_input = OptionalNumber(p["tax_cost_basis"], decimals=0)
+        self.tax_rate_input = QDoubleSpinBox()
+        self.tax_rate_input.setRange(0, 99.99)
+        self.tax_rate_input.setDecimals(2)
+        self.tax_rate_input.setSuffix(" %")
+        self.tax_rate_input.setValue(p["tax_rate"])
+        self.annual_allowance_input = _number(p["annual_allowance"])
+        self.annual_allowance_input.setMinimum(0)
+        self.tax_assumptions_confirmed_input = QCheckBox("과세 대상과 아래 계산 가정을 확인")
+        self.tax_assumptions_confirmed_input.setChecked(p["tax_assumptions_confirmed"])
+        for title, editor in [("월 신규 납입액 (원)", self.monthly_contribution_input),
+                              ("납입 재원·지속 기간", self.contribution_source_input),
+                              ("신규 자금 확인", self.contribution_confirmed_input),
+                              ("목표 금액의 의미", self.target_basis_input),
+                              ("현재 자산의 세무상 원가 (원)", self.tax_cost_basis_input),
+                              ("양도차익 세율 가정", self.tax_rate_input),
+                              ("최종 매도 해의 남은 공제 (원)", self.annual_allowance_input),
+                              ("세금 가정 확인", self.tax_assumptions_confirmed_input)]:
+            money.addRow(title, editor)
+        finance_notice = QLabel("자산 금액 분석은 수치 목표와 원·만원·억원 단위를 선택하세요. 이 탭의 모든 금액은 원 단위이며 목표 표시 단위와 별개입니다. 신규 납입액은 생활비·세금 차감 후 계좌 밖에서 들어오는 돈으로, 기존 자산 매도·재투자와 구분합니다. 세무 원가는 화면 평가손익으로 자동 추정하지 않습니다. 세후 계산은 동일 해외주식 과세 방식·마지막 해 전량 매도·현재 가정 유지의 단순 모형이며 중간 매매·배당 과세와 환전 비용은 포함하지 않습니다.")
+        finance_notice.setWordWrap(True)
+        finance_notice.setObjectName("muted")
+        money.addRow(finance_notice)
+        self.planning_tabs.addTab(finance, "자산·세금")
+        title = QLabel("세부 로드맵을 위한 분석 조건")
+        title.setStyleSheet("font-size: 15px; font-weight: 650;")
+        self.form.addRow(title)
+        self.form.addRow(self.planning_tabs)
+        self._planning_visibility()
+
+    def _planning_visibility(self, *_args) -> None:
+        self.planning_tabs.setTabVisible(2, self.category_input.currentData() == "finance")
+
+    def planning_values(self) -> dict:
+        return normalize_planning({
+            "context": self.context_input.toPlainText(),
+            "requirements": self.requirements_input.toPlainText(),
+            "evidence": self.evidence_input.toPlainText(),
+            "constraints": self.constraints_input.toPlainText(),
+            "reference_url": self.reference_input.text(),
+            "estimated_hours": self.estimated_hours_input.value(),
+            "weekly_hours": self.weekly_hours_input.value(),
+            "monthly_cost": self.monthly_cost_input.value(),
+            "monthly_contribution": self.monthly_contribution_input.value(),
+            "contribution_source": self.contribution_source_input.text(),
+            "contribution_confirmed": self.contribution_confirmed_input.isChecked(),
+            "target_basis": self.target_basis_input.currentData(),
+            "tax_cost_basis": self.tax_cost_basis_input.value(),
+            "tax_rate": self.tax_rate_input.value(),
+            "annual_allowance": self.annual_allowance_input.value(),
+            "tax_assumptions_confirmed": self.tax_assumptions_confirmed_input.isChecked(),
+        })
 
     def _numeric_visibility(self, *_args) -> None:
         self.numeric_box.setVisible(self.kind_input.currentData() == "numeric")
@@ -204,10 +339,15 @@ class GoalDialog(_FormDialog):
             "target": self.target_input.value(), "unit": self.unit_input.text().strip(),
             "direction": self.direction_input.currentData(), "criteria": self.criteria_input.toPlainText().strip(),
             "status": self.status_input.currentData(),
+            "planning": self.planning_values(),
         }
 
     def accept(self) -> None:
-        values = self.values()
+        try:
+            values = self.values()
+        except ValueError as exc:
+            self._required(self.reference_input, str(exc))
+            return
         if not values["title"]:
             self._required(self.title_input, "목표 이름을 입력해 주세요.")
             return
@@ -261,12 +401,15 @@ class TaskDialog(_FormDialog):
         self.actual_input.setSuffix(" 분")
         self.actual_input.setValue(int(t.get("actual_minutes", 0)))
         self.stage_input = QLineEdit(str(t.get("stage", "직접 작성")))
+        self.done_when_input = _text(t.get("done_when", ""), "이 과제를 완료했다고 판단할 기준", 60)
+        self.rationale_input = _text(t.get("rationale", ""), "이 과제가 목표 달성에 필요한 이유", 60)
         self.done_input = QCheckBox("이 과제를 완료했습니다")
         self.done_input.setChecked(bool(t.get("done", False)))
         for label, widget in [
             ("연결 목표 *", self.goal_input), ("과제 이름 *", self.title_input),
             ("실행 날짜", schedule), ("예상 시간", self.minutes_input),
             ("실제 시간", self.actual_input), ("단계 / 중간 성과", self.stage_input), ("실행 상태", self.done_input),
+            ("과제 완료 기준", self.done_when_input), ("제안 이유", self.rationale_input),
         ]:
             self.form.addRow(label, widget)
         note = QLabel("실제 시간은 한 번만 기록됩니다. 과제 완료와 최종 목표 달성은 별도입니다.")
@@ -283,6 +426,8 @@ class TaskDialog(_FormDialog):
             "minutes": self.minutes_input.value(), "actual_minutes": self.actual_input.value(),
             "stage": self.stage_input.text().strip() or "직접 작성", "done": self.done_input.isChecked(),
             "position": self.original.get("position", 0),
+            "done_when": self.done_when_input.toPlainText().strip(),
+            "rationale": self.rationale_input.toPlainText().strip(),
         }
 
     def accept(self) -> None:

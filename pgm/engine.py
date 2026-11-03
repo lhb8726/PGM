@@ -20,47 +20,6 @@ CATEGORIES = {
     "habits": "자기관리 및 습관",
 }
 
-# Durations are initial estimates. Every generated title is explicitly a draft.
-TEMPLATES = {
-    "finance": [
-        ("01 현황 확인", "자산·부채·현금흐름과 기준일 정리", 45),
-        ("02 목표 구체화", "목표 금액·기한·필요 자금 확인", 30),
-        ("03 실행 설계", "월별 실행 예산과 확인 항목 작성", 45),
-        ("04 점검", "실제 기록과 계획의 차이 검토", 30),
-    ],
-    "career": [
-        ("01 현황 확인", "목표 직무·자격의 요구 기준 확인", 30),
-        ("02 역량 보완", "현재 결과물과 필요한 역량 비교", 45),
-        ("03 결과물", "핵심 결과물의 작은 초안 제작", 60),
-        ("04 검토", "완료 기준으로 결과물 검토·보완", 45),
-    ],
-    "learning": [
-        ("01 수준 확인", "현재 수준을 확인할 문제·자료 선택", 30),
-        ("02 핵심 학습", "첫 핵심 주제 학습과 요약", 45),
-        ("03 적용", "실전 문제 풀이 또는 결과물 제작", 60),
-        ("04 점검", "오답·부족한 부분과 다음 학습 정리", 30),
-    ],
-    "health": [
-        ("01 현황 확인", "운동·수면 기록과 활동 제약 정리", 30),
-        ("02 기준 설정", "측정 가능한 생활 목표와 확인 방법 설정", 15),
-        ("03 실행 설계", "시간·활동 제약에 맞는 실행 항목 작성", 30),
-        ("04 점검", "실제 기록과 지속 가능성 검토", 15),
-    ],
-    "life": [
-        ("01 방향 설정", "원하는 경험과 완료 기준 구체화", 30),
-        ("02 자원 확인", "시간·예산·참여 조건 확인", 30),
-        ("03 준비", "첫 준비 항목 실행", 45),
-        ("04 회고", "경험 기록과 다음 개선점 정리", 30),
-    ],
-    "habits": [
-        ("01 현황 확인", "현재 행동과 방해 요인 기록", 20),
-        ("02 행동 설계", "작은 행동·수행 요일·시작 조건 설정", 20),
-        ("03 실행 확인", "수행 기록과 실행 어려움 정리", 30),
-        ("04 회고", "실행률과 다음 개선 행동 검토", 20),
-    ],
-}
-
-
 def _day(value: Any) -> date | None:
     if isinstance(value, datetime):
         return value.date()
@@ -111,6 +70,8 @@ def progress(goal: dict, tasks: list[dict]) -> float:
     """
     if goal.get("status") == "completed":
         return 1.0
+    if goal.get("category") == "finance" and (goal.get("planning") or {}).get("target_basis") == "after_tax_cash":
+        return _after_tax_progress(goal)["value"] or 0.0
     if goal.get("kind") == "numeric":
         values = [goal.get(key) for key in ("baseline", "current", "target")]
         if any(value is None or not math.isfinite(_number(value, math.nan)) for value in values):
@@ -129,6 +90,25 @@ def progress(goal: dict, tasks: list[dict]) -> float:
     if not related:
         return 0.0
     return sum(bool(task.get("done")) for task in related) / len(related)
+
+
+def _after_tax_progress(goal: dict) -> dict:
+    from .finance_analysis import analyze_finance
+    data = analyze_finance(goal, {}).get("finance", {})
+    net, target = data.get("current_net"), data.get("target")
+    if net is None or target is None:
+        return {"value": None, "label": "세후 진행도 정보 부족", "detail": "세무 원가와 과세 가정을 먼저 확인하세요."}
+    value = float(net >= target) if target <= 0 else max(0.0, min(1.0, net / target))
+    return {"value": value, "label": "세후 자금 충족률", "detail": f"현재 청산 가정 {net:,.0f}원 / 목표 {target:,.0f}원 · 과세 가정에 따른 계산"}
+
+
+def progress_state(goal: dict, tasks: list[dict]) -> dict:
+    """Keep unknown tax outcomes distinct from a genuine zero progress."""
+    if goal.get("status") == "completed":
+        return {"value": 1.0, "label": "달성 직접 확인", "detail": "사용자가 최종 달성을 확인한 기록입니다."}
+    if goal.get("category") == "finance" and (goal.get("planning") or {}).get("target_basis") == "after_tax_cash":
+        return _after_tax_progress(goal)
+    return {"value": progress(goal, tasks), "label": "목표 진행도", "detail": "시작값 대비 변화 또는 연결된 준비 과제의 완료 비율입니다."}
 
 
 def diagnose(profile: dict, metrics: list[dict], goals: list[dict]) -> list[dict]:
@@ -251,15 +231,23 @@ def _goal_order(goal: dict) -> tuple:
     return (-_number(goal.get("priority"), 2), _day(goal.get("due_date")) or date.max, str(goal.get("id", "")))
 
 
+def _goal_limit(goal: dict, fallback: int) -> int:
+    value = (goal.get("planning") or {}).get("weekly_hours")
+    return fallback if value is None else max(0, int(_number(value) * 60 / 7))
+
+
 def build_plan(goals: list[dict], existing_tasks: list[dict], profile: dict,
                habits: list[dict] | None = None, today: Any = None,
-               horizon_days: int = 28) -> dict:
-    """Generate editable template drafts against one shared daily time budget.
+               horizon_days: int = 28, reports: dict | None = None,
+               metrics: list[dict] | None = None) -> dict:
+    """Schedule report actions within one shared, finite time budget.
 
-    Weekly net hours are evenly spread over seven days, rounded down to whole
-    minutes per day. A task's real cost, intra-day appointments and proven ability
-    are not inferred. Drafts never mark the final goal complete.
+    Long-range milestones remain in the report; only actions whose phase starts
+    inside this preview are eligible. Completed fragments are retained and count
+    toward the same stable action key on subsequent previews.
     """
+    import hashlib
+    from .analysis import analyze_goal
     start = _today(today)
     free, capacity, warnings = _calendar(profile, existing_tasks, habits, start, horizon_days)
     available = sum(free.values())
@@ -267,56 +255,76 @@ def build_plan(goals: list[dict], existing_tasks: list[dict], profile: dict,
         return {"tasks": [], "warnings": warnings + ["계획 범위가 비어 있습니다."], "summary": "생성된 초안이 없습니다.", "total_minutes": 0, "available_minutes": 0}
     end = max(free)
     generated = []
-    for goal in sorted([goal for goal in goals if _active(goal)], key=_goal_order):
+    for goal in sorted([g for g in goals if _active(g)], key=_goal_order):
         related = _related(goal, existing_tasks)
         title = str(goal.get("title") or "목표")
-        if related:
-            if any(not task.get("done") for task in related):
-                warnings.append(f"‘{title}’에는 미완료 과제가 있어 중복 초안을 만들지 않았습니다. 재계획을 사용하세요.")
-            else:
-                warnings.append(f"‘{title}’의 준비 과제가 모두 완료되었습니다. 최종 완료 기준을 직접 확인하세요.")
+        if any(not t.get("done") for t in related):
+            warnings.append(f"‘{title}’에는 미완료 과제가 있어 중복 초안을 만들지 않았습니다. 재계획을 사용하세요.")
             continue
         deadline = _deadline(goal, start, end, warnings)
         if deadline is None:
             continue
-        template = TEMPLATES.get(goal.get("category"), TEMPLATES["habits"])
+        report = (reports or {}).get(goal.get("id")) or analyze_goal(goal, profile, metrics or [], existing_tasks, habits, goals, start)
+        warnings.extend(report.get("warnings", []))
+        if report.get("missing"):
+            warnings.append(f"‘{title}’ 추가 확인 {len(report['missing'])}건. 미확인 항목은 상세 분석에서 확인하고 초기 확인 과제부터 진행하세요.")
+        anchor = _day(report.get("anchor_on")) or _day(goal.get("created_at")) or start
+        goal_free = {day: _goal_limit(goal, capacity) for day in free}
+        for task in related:
+            day = _task_capacity_day(task)
+            if day in goal_free:
+                goal_free[day] = max(0, goal_free[day] - _minutes(task, bool(task.get("done"))))
         earliest = start
-        position = 0
-        incomplete = False
-        for stage, task_title, duration in template:
-            remaining = duration
-            pieces = []
-            for day in free:
-                if day < earliest or day > deadline:
-                    continue
-                block = min(free[day], remaining, 60)
-                if block <= 0:
-                    continue
-                pieces.append((day, block))
-                free[day] -= block
-                remaining -= block
-                earliest = day
+        position = max([int(t.get("position", 0)) for t in related] + [0])
+        for phase in report.get("phases", []):
+            not_before = anchor + timedelta(days=max(0, int(phase.get("start_day", 0))))
+            if not_before > deadline:
+                continue
+            earliest = max(earliest, not_before, start)
+            phase_end = anchor + timedelta(days=max(0, int(phase.get("end_day", horizon_days))))
+            if phase_end < start:
+                warnings.append(f"‘{title}’의 ‘{phase['title']}’ 권장 기간이 지났습니다. 미완료 항목을 현재부터 다시 검토하는 초안입니다.")
+            blocked = False
+            for action in phase.get("actions", []):
+                semantic = f"{goal.get('category')}|{phase['title']}|{action['title']}"
+                key = hashlib.sha256(semantic.encode()).hexdigest()[:24]
+                duration = max(1, min(1440, int(action.get("minutes", 30))))
+                done_minutes = sum(_minutes(t) for t in related if t.get("done") and t.get("analysis_key") == key)
+                remaining = max(0, duration - done_minutes)
                 if remaining == 0:
-                    break
-            for index, (day, minutes) in enumerate(pieces, 1):
-                position += 1
-                suffix = f" · {index}/{len(pieces)}" if len(pieces) > 1 else ""
+                    continue
+                pieces = []
+                for day in free:
+                    if day < earliest or day > deadline:
+                        continue
+                    block = min(free[day], goal_free[day], remaining, 60)
+                    if block <= 0:
+                        continue
+                    pieces.append((day, block));free[day] -= block;goal_free[day] -= block;remaining -= block;earliest = day
+                    if remaining == 0:
+                        break
+                for index, (day, minutes) in enumerate(pieces, 1):
+                    position += 1
+                    suffix = f" · {index}/{len(pieces)}" if len(pieces) > 1 else ""
+                    if remaining:
+                        suffix += " · 일부"
+                    generated.append({
+                        "goal_id": goal.get("id"), "title": f"{action['title']}{suffix}",
+                        "scheduled_date": day.isoformat(), "minutes": minutes,
+                        "actual_minutes": 0, "done": False, "stage": phase["title"],
+                        "position": position, "completed_at": "", "source": "목표 분석 기반 초안",
+                        "done_when": action.get("done_when", ""), "rationale": action.get("why", ""),
+                        "analysis_key": key, "not_before": not_before.isoformat(),
+                    })
                 if remaining:
-                    suffix += " · 일부"
-                generated.append({
-                    "goal_id": goal.get("id"), "title": f"{task_title}{suffix}",
-                    "scheduled_date": day.isoformat(), "minutes": minutes,
-                    "actual_minutes": 0, "done": False, "stage": stage,
-                    "position": position, "completed_at": "", "source": "규칙 기반 초안",
-                })
-            if remaining:
-                incomplete = True
-                break  # Later stages cannot precede the incomplete stage.
-        if incomplete:
-            warnings.append(f"‘{title}’의 전체 초안을 기한·가용 시간 안에 배치할 수 없습니다. 기한 연장·범위 축소·시간 조정을 검토하세요.")
-    total = sum(task["minutes"] for task in generated)
+                    warnings.append(f"‘{title}’의 ‘{action['title']}’ 중 {remaining}분을 배치하지 못했습니다. 기한 연장·범위 축소·시간 배분을 검토하세요.")
+                    blocked = True
+                    break
+            if blocked:
+                break
+    total = sum(t["minutes"] for t in generated)
     summary = f"{len(generated)}개 실행 초안 · {total}분 배치 / 새 과제에 사용 가능한 {available}분."
-    summary += " 주당 순가용 시간을 7일에 균등 배분한 시간 기준 계획이며, 소요 시간과 완료 기준은 직접 확인하세요."
+    summary += " 목표 분석의 단계·완료 기준을 연결하고 주당 시간을 7일에 균등 배분했습니다. 장기 단계는 상세 보고서에서 확인하세요."
     return {"tasks": generated, "warnings": list(dict.fromkeys(warnings)), "summary": summary,
             "total_minutes": total, "available_minutes": available}
 
@@ -330,7 +338,7 @@ def replan(tasks: list[dict], goals: list[dict], profile: dict,
     candidates = [task for task in tasks if not task.get("done") and task.get("goal_id") in goal_map]
     candidate_ids = {id(task) for task in candidates}
     fixed = [task for task in tasks if id(task) not in candidate_ids]
-    free, _, warnings = _calendar(profile, fixed, habits, start, horizon_days)
+    free, capacity, warnings = _calendar(profile, fixed, habits, start, horizon_days)
     available = sum(free.values())
     end = max(free) if free else start - timedelta(days=1)
     ordered = sorted(candidates, key=lambda task: (
@@ -342,6 +350,12 @@ def replan(tasks: list[dict], goals: list[dict], profile: dict,
     earliest = defaultdict(lambda: start)
     blocked = set()
     deadline_cache = {}
+    goal_free = {gid: {day: _goal_limit(goal, capacity) for day in free} for gid, goal in goal_map.items()}
+    for task in fixed:
+        gid = task.get("goal_id")
+        day = _task_capacity_day(task)
+        if gid in goal_free and day in goal_free[gid]:
+            goal_free[gid][day] = max(0, goal_free[gid][day] - _minutes(task, bool(task.get("done"))))
     for task in ordered:
         goal_id = task.get("goal_id")
         goal = goal_map[goal_id]
@@ -353,9 +367,11 @@ def replan(tasks: list[dict], goals: list[dict], profile: dict,
         minutes = _minutes(task)
         if goal_id not in blocked and deadline is not None and minutes > 0:
             for day in free:
-                if earliest[goal_id] <= day <= deadline and free[day] >= minutes:
+                not_before = _day(task.get("not_before")) or start
+                if max(earliest[goal_id], not_before) <= day <= deadline and min(free[day], goal_free[goal_id][day]) >= minutes:
                     result["scheduled_date"] = day.isoformat()
                     free[day] -= minutes
+                    goal_free[goal_id][day] -= minutes
                     earliest[goal_id] = day
                     break
         if not result["scheduled_date"]:

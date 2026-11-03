@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (
 
 from . import __version__
 from . import engine
+from .analysis import analyze_goal
+from .analysis_view import GoalAnalysisDialog
 from .constants import CATEGORIES, HORIZONS, KINDS, NAVIGATION, PRIORITIES
 from .dialogs import GoalDialog, HabitDialog, MetricDialog, ReviewDialog, TaskDialog
 from .storage import Store
@@ -111,7 +113,7 @@ class MainWindow(QMainWindow):
         side.addStretch()
         box,bl=panel();bl.setContentsMargins(12,12,12,12)
         bl.addWidget(label("내 PC에 저장되는 성장 기록",wrap=True))
-        bl.addWidget(label("v0.1 · 데스크톱 프로토타입","muted"))
+        bl.addWidget(label(f"v{__version__} · 데스크톱 프로토타입","muted"))
         side.addWidget(box);shell.addWidget(sidebar)
         right=QWidget();right_layout=QVBoxLayout(right);right_layout.setContentsMargins(0,0,0,0);right_layout.setSpacing(0)
         top=QWidget();top.setObjectName("topbar");top.setFixedHeight(75)
@@ -186,18 +188,21 @@ class MainWindow(QMainWindow):
             return None
 
     def goal_card(self,g):
-        c=CATEGORIES[g["category"]];p=engine.progress(g,self.tasks)
+        c=CATEGORIES[g["category"]];state=engine.progress_state(g,self.tasks);p=state["value"]
         w,l=panel();w.setMinimumWidth(300)
         l.addLayout(row(pill(c["name"],c["color"]),pill(HORIZONS.get(g["horizon"],"목표")),None,label("✓ 달성 확인" if g["status"]=="completed" else PRIORITIES.get(g["priority"],"보통"),"muted")))
         title=label(g["title"],"sectionTitle",True);l.addWidget(title)
         if g["kind"]=="numeric":detail=f"{number(g['current'])} / {number(g['target'])} {g['unit']}"
         else:detail=g.get("criteria","")
-        l.addWidget(label(detail,"muted",True));l.addWidget(progress_bar(p,c["color"]))
-        l.addLayout(row(label(f"{p:.0%} · 목표 진행도","muted"),None,label(date_text(g["due_date"]),"muted")))
+        if g["category"]=="finance" and (g.get("planning") or {}).get("target_basis")=="after_tax_cash":detail="현재 평가액 / 세후 목표  ·  "+detail
+        l.addWidget(label(detail,"muted",True));l.addWidget(progress_bar(p or 0,c["color"]))
+        progress_label=state["label"] if p is None else f"{p:.0%} · {state['label']}"
+        text=label(progress_label,"muted");text.setToolTip(state["detail"])
+        l.addLayout(row(text,None,label(date_text(g["due_date"]),"muted")))
         pending=[t for t in self.tasks if t["goal_id"]==g["id"] and not t["done"]]
         next_task=min(pending,key=lambda t:(t.get("scheduled_date") or "9999",t.get("position",0)),default=None)
         l.addWidget(label("다음  ·  "+(next_task["title"] if next_task else "다음 단계를 계획해 보세요"),wrap=True))
-        l.addLayout(row(button("목표 수정",lambda:self.edit_goal(g),ghost=True),None,button("로드맵 보기",lambda:self.open_roadmap(g),ghost=True)))
+        l.addLayout(row(button("상세 분석",lambda:self.show_goal_analysis(g),ghost=True),button("목표 수정",lambda:self.edit_goal(g),ghost=True),None,button("로드맵",lambda:self.open_roadmap(g),ghost=True)))
         return w
 
     def goal_grid(self,layout,goals):
@@ -219,6 +224,8 @@ class MainWindow(QMainWindow):
         detail=f"{g['title'] if g else '연결 목표 없음'}  ·  {date_text(t.get('scheduled_date',''))}"
         if t["done"]:detail+=f" · 실제 {t['actual_minutes']}분" if t["actual_minutes"] else " · 실제 시간 미기록"
         text.addWidget(label(detail,"muted",True))
+        if t.get("done_when"):
+            criterion=label("완료 기준  ·  "+t["done_when"],"muted",True);criterion.setToolTip(t.get("rationale", ""));text.addWidget(criterion)
         h.addLayout(text,1);h.addWidget(pill(f"{t['minutes']}분",CATEGORIES[g["category"]]["color"] if g else "#b69af7"))
         h.addWidget(button("수정",lambda:self.edit_task(t),ghost=True));l.addLayout(h)
         return w
@@ -237,7 +244,8 @@ class MainWindow(QMainWindow):
         for card in [stat_card("진행 중인 목표",str(len(active)),"각자의 속도로, 같은 방향으로","#b69af7","↗"),stat_card("오늘의 실행",f"{done} / {len(today)}","오늘 예정된 과제 기준","#82c5a3","✓"),stat_card("다음 7일 계획",f"{minutes/60:.1f}h",f"전체 분야 · 주당 가용 {self.profile['weekly_hours']:g}h","#70c4da","◷"),stat_card("이번 주 습관",str(sum(len([d for d in h['completions'] if date.today()-timedelta(days=6)<=date.fromisoformat(d)<=date.today()]) for h in self.habits)),"최근 7일의 수행 기록","#e5bd67","✦")]:stats.addWidget(card,1)
         layout.addLayout(stats)
         hero,hl=panel(True)
-        avg=sum(engine.progress(g,self.tasks) for g in goals)/len(goals) if goals else 0
+        known=[state["value"] for g in goals if (state:=engine.progress_state(g,self.tasks))["value"] is not None]
+        avg=sum(known)/len(known) if known else 0
         inside=row();copy=QVBoxLayout();copy.setSpacing(9)
         copy.addWidget(label("YOUR NEXT MOVE","eyebrow"))
         overdue=[t for t in tasks if not t["done"] and t.get("scheduled_date") and t["scheduled_date"]<date.today().isoformat()]
@@ -246,6 +254,7 @@ class MainWindow(QMainWindow):
         else:headline="계획을 실행으로, 실행을 성장의 근거로.";sub="오늘의 과제와 결과를 기록하면 다음 계획의 기준이 됩니다."
         copy.addWidget(label(headline,"sectionTitle",True));copy.addWidget(label(sub,"muted",True))
         copy.addWidget(button("나의 성장 경로 확인  →",lambda:self.navigate("roadmap"),ghost=True),0,Qt.AlignmentFlag.AlignLeft)
+        if len(known)!=len(goals):copy.addWidget(label(f"진행도 계산 가능 {len(known)}/{len(goals)}개 · 정보 부족 목표는 평균에서 제외","muted",True))
         inside.addLayout(copy,1);inside.addWidget(Ring(avg,"목표 평균 진행도"));hl.addLayout(inside);layout.addWidget(hero)
         columns=QHBoxLayout();columns.setSpacing(22)
         left=QVBoxLayout();left.setSpacing(14);self.section(left,"집중하고 있는 목표",button("모두 보기 →",lambda:self.navigate("goals"),ghost=True))
@@ -298,7 +307,13 @@ class MainWindow(QMainWindow):
         layout.addWidget(label("진행도는 목표 기준의 변화 또는 준비 과제 완료 비율입니다. 과제를 모두 마친 뒤에도 최종 달성은 별도로 확인하세요.","muted",True))
 
     def page_roadmap(self,layout):
-        self.heading(layout,"목표에서 오늘까지, 이어지는 경로.","모든 분야의 시간과 습관을 함께 반영한 규칙 기반 초안을 검토하고 적용하세요.","GROWTH ROADMAP")
+        self.heading(layout,"목표에서 오늘까지, 이어지는 경로.","현재 근거·필요 조건·대안 시나리오를 검토한 뒤 단계별 계획을 실행 과제로 연결하세요.","GROWTH ROADMAP")
+        selected=QComboBox()
+        for g in self.filtered_goals():selected.addItem(g["title"],g["id"])
+        selected.setMinimumWidth(250)
+        detail=button("목표 상세 분석·단계 보기",lambda:self.show_goal_analysis(next((g for g in self.goals if g["id"]==selected.currentData()),None)),True)
+        detail.setEnabled(bool(selected.count()))
+        layout.addLayout(row(selected,detail,None))
         scale=QComboBox();scale.addItems(["월간","주간","일간"]);scale.setCurrentText(self.roadmap_scale)
         scale.currentTextChanged.connect(self.set_roadmap_scale)
         layout.addLayout(row(scale,None,button("미완료 일정 재배치",lambda:self.plan(True)),button("✦ 로드맵 초안 만들기",lambda:self.plan(False),True)))
@@ -354,8 +369,8 @@ class MainWindow(QMainWindow):
         grid=QGridLayout();grid.setSpacing(14)
         for i,(key,c) in enumerate(CATEGORIES.items()):
             if self.category!="all" and key!=self.category:continue
-            goals=[g for g in self.goals if g["category"]==key];p=sum(engine.progress(g,self.tasks) for g in goals)/len(goals) if goals else 0
-            card,cl=panel();cl.addLayout(row(pill(c["name"],c["color"]),None,label(f"{p:.0%}" if goals else "목표 없음")));cl.addWidget(progress_bar(p,c["color"]));cl.addWidget(label(f"목표 {len(goals)}개 · 동일 가중 평균 · 역량 평가 점수 아님","muted",True));grid.addWidget(card,i//2,i%2)
+            goals=[g for g in self.goals if g["category"]==key];known=[state["value"] for g in goals if (state:=engine.progress_state(g,self.tasks))["value"] is not None];p=sum(known)/len(known) if known else 0
+            card,cl=panel();cl.addLayout(row(pill(c["name"],c["color"]),None,label(f"{p:.0%}" if known else ("정보 부족" if goals else "목표 없음"))));cl.addWidget(progress_bar(p,c["color"]));cl.addWidget(label(f"목표 {len(goals)}개 중 {len(known)}개 계산 · 동일 가중 평균 · 역량 평가 점수 아님","muted",True));grid.addWidget(card,i//2,i%2)
         layout.addLayout(grid)
         self.section(layout,"나의 회고",button("＋ 회고 쓰기",self.add_review,ghost=True))
         reviews=self.store.reviews()
@@ -373,11 +388,14 @@ class MainWindow(QMainWindow):
     def page_coach(self,layout):
         self.heading(layout,"기록에 근거한 제안, 선택은 당신에게.","현재 버전은 규칙 기반 코치입니다. 외부 생성형 AI와 자동 자료 검색은 연결하지 않았습니다.","COACHING ROOM")
         layout.addLayout(row(pill("규칙 기반 코치","#82c5a3"),pill("외부 AI 미연결","#e5bd67"),None))
+        for g in self.filtered_goals()[:3]:
+            report=analyze_goal(g,self.profile,self.metrics,self.tasks,self.habits,self.goals)
+            card,cl=panel();cl.addWidget(label(g["title"],"sectionTitle",True));cl.addWidget(label(report["summary"],"muted",True));cl.addWidget(label(f"추가 확인 {len(report['missing'])}건 · 조건·위험 {len(report['warnings'])}건",wrap=True));cl.addWidget(button("상세 진단·시나리오·단계별 로드맵",lambda goal=g:self.show_goal_analysis(goal),ghost=True),0,Qt.AlignmentFlag.AlignLeft);layout.addWidget(card)
         for insight in engine.insights(self.profile,self.goals,self.tasks,self.metrics,self.habits):
             card,cl=panel();cl.addWidget(label(insight["title"],"sectionTitle",True));cl.addWidget(label(insight["body"],"muted",True));layout.addWidget(card)
         actions,al=panel();al.addWidget(label("추천을 다음 계획으로 연결하기","sectionTitle"));al.addWidget(label("기존 완료 기록을 남기고, 현재 가용 시간 안에서 미완료 과제의 새 일정을 미리 확인합니다.","muted",True));al.addWidget(button("계획 수정안 보기",lambda:self.plan(True),True),0,Qt.AlignmentFlag.AlignLeft);layout.addWidget(actions)
         external,el=panel();el.addWidget(label("외부 상담과 자료 확인","sectionTitle"));el.addWidget(label("목표·실행 현황을 요약해 복사하거나 브라우저에서 자료를 직접 확인할 수 있습니다. 검색 결과를 검증된 근거로 자동 등록하지 않습니다.","muted",True))
-        self.include_profile=QCheckBox("상담 요약에 프로필·자산 수치도 포함");el.addWidget(self.include_profile)
+        self.include_profile=QCheckBox("추가로 프로필·전체 자산 현황 포함 (목표 입력 수치는 기본 포함)");el.addWidget(self.include_profile)
         search=QLineEdit();search.setPlaceholderText("직무·시험명 등 확인할 자료 입력")
         el.addLayout(row(button("상담용 요약 복사",self.copy_coaching),search,button("브라우저 검색 ↗",lambda:self.open_search(search.text()))));layout.addWidget(external)
 
@@ -397,8 +415,28 @@ class MainWindow(QMainWindow):
         if goal:dialog.form.addRow(button("이 목표와 연결 과제 삭제",lambda:self.delete_record("goal",goal["id"],dialog)))
         if dialog.exec()==QDialog.DialogCode.Accepted:
             def action():
-                self.store.save_goal(dialog.values());self.refresh()
+                goal_id=self.store.save_goal(dialog.values());self.refresh()
+                saved=next(g for g in self.goals if g["id"]==goal_id)
+                self.show_goal_analysis(saved)
             self.guard(action)
+
+    def show_goal_analysis(self,goal=None):
+        if not goal:return
+        def action():
+            self.snapshot()
+            current=next((g for g in self.goals if g["id"]==goal["id"]),None)
+            if current is None:return
+            report=analyze_goal(current,self.profile,self.metrics,self.tasks,self.habits,self.goals)
+            plan=engine.build_plan([current],self.tasks,self.profile,self.habits,reports={current["id"]:report},metrics=self.metrics)
+            dialog=GoalAnalysisDialog(report,plan,self)
+            result=dialog.exec()
+            if result==QDialog.DialogCode.Accepted:
+                self.store.add_tasks(plan["tasks"])
+                self.store.log_change(f"‘{current['title']}’ 상세 분석 기반 실행 과제 추가",plan["summary"])
+                self.refresh()
+            elif result==2:
+                self.edit_goal(current)
+        self.guard(action)
 
     def edit_task(self,task=None):
         if not self.goals:
@@ -460,7 +498,7 @@ class MainWindow(QMainWindow):
         if not self.goals:
             QMessageBox.information(self,"목표가 필요합니다","프로필과 첫 목표를 입력한 뒤 로드맵을 생성하세요.");return
         try:
-            result=(engine.replan(self.tasks,self.goals,self.profile,self.habits) if replan else engine.build_plan(self.goals,self.tasks,self.profile,self.habits))
+            result=(engine.replan(self.tasks,self.goals,self.profile,self.habits) if replan else engine.build_plan(self.goals,self.tasks,self.profile,self.habits,metrics=self.metrics))
         except ValueError as exc:
             QMessageBox.warning(self,"계획 조건을 확인하세요",str(exc));return
         dialog=QDialog(self);dialog.setWindowTitle("계획 수정안" if replan else "로드맵 초안");dialog.resize(820,650)
@@ -469,9 +507,9 @@ class MainWindow(QMainWindow):
         if result["warnings"]:
             warnings=QTextEdit();warnings.setReadOnly(True);warnings.setPlainText("\n".join("• "+s for s in result["warnings"]));warnings.setMaximumHeight(135);l.addWidget(warnings)
         entries=result["tasks"]
-        table=QTableWidget(len(entries),4);table.setHorizontalHeaderLabels(["실행 과제","일정","예상 시간","단계"])
+        table=QTableWidget(len(entries),5);table.setHorizontalHeaderLabels(["실행 과제","일정","예상 시간","단계","완료 기준"])
         for i,t in enumerate(entries):
-            for j,text in enumerate([t["title"],t.get("scheduled_date") or "배치 불가",f"{t['minutes']}분",t.get("stage","")]):table.setItem(i,j,QTableWidgetItem(str(text)))
+            for j,text in enumerate([t["title"],t.get("scheduled_date") or "배치 불가",f"{t['minutes']}분",t.get("stage",""),t.get("done_when","")]):table.setItem(i,j,QTableWidgetItem(str(text)))
         table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch);table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers);table.verticalHeader().setVisible(False);l.addWidget(table,1)
         l.addWidget(label("규칙 기반 초안 · 예상 시간과 선행 학습은 목표에 맞춰 직접 수정할 수 있습니다. 완료 기록은 유지됩니다.","muted",True))
         cancel=button("취소",dialog.reject);apply=button(f"{len(entries)}개 변경 적용" if replan else f"{len(entries)}개 과제 추가",dialog.accept,True);apply.setEnabled(bool(entries));l.addLayout(row(None,cancel,apply))
@@ -486,6 +524,7 @@ class MainWindow(QMainWindow):
 
     def copy_coaching(self):
         data={"goals":self.goals,"tasks":self.tasks,"weekly_hours":self.profile["weekly_hours"]}
+        data["goal_analysis"]=[analyze_goal(g,self.profile,self.metrics,self.tasks,self.habits,self.goals) for g in self.goals if g["status"]=="active"]
         if self.include_profile.isChecked():data["profile"]=self.profile
         prompt="다음은 내가 직접 기록한 목표와 실행 현황이다. 사실·해석·정보 부족을 구분하고, 가용 시간 안에서 실행 가능한 개선안을 제안해줘. 근거 없는 실력 점수·성공 확률·투자수익을 만들지 말아줘.\n\n"+json.dumps(data,ensure_ascii=False,indent=2)
         QApplication.clipboard().setText(prompt);self.statusBar().showMessage("상담용 요약을 복사했습니다. 외부 서비스에 붙여넣을 내용을 확인하세요.",7000)
@@ -557,6 +596,12 @@ def main(argv=None):
             try:
                 if args.smoke_test:
                     for key,_,_ in NAVIGATION:window.navigate(key);app.processEvents()
+                    for goal in window.goals:
+                        report=analyze_goal(goal,window.profile,window.metrics,window.tasks,window.habits,window.goals)
+                        preview=engine.build_plan([goal],window.tasks,window.profile,window.habits,reports={goal['id']:report},metrics=window.metrics)
+                        probe=GoalAnalysisDialog(report,preview,window);probe.show();app.processEvents()
+                        for tab in range(probe.tabs.count()):probe.tabs.setCurrentIndex(tab);app.processEvents()
+                        probe.close();probe.deleteLater()
                     window.navigate("dashboard");app.processEvents()
                 if args.screenshot:
                     args.screenshot.parent.mkdir(parents=True,exist_ok=True)
