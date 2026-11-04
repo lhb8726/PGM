@@ -14,9 +14,9 @@ from PySide6.QtCore import QDate, QSettings, QStandardPaths, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDateEdit, QDialog, QDoubleSpinBox,
-    QFileDialog, QFormLayout, QGridLayout, QHBoxLayout,
+    QFileDialog, QGridLayout, QHBoxLayout,
     QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton,
-    QScrollArea, QSizePolicy, QSystemTrayIcon, QTabWidget,
+    QScrollArea, QSizePolicy, QSystemTrayIcon, QTabBar, QTabWidget,
     QTextEdit, QVBoxLayout, QWidget,
 )
 
@@ -76,6 +76,24 @@ def date_text(value):
 
 def number(value):
     return f"{value:,.0f}" if float(value).is_integer() else f"{value:,.1f}"
+
+
+class ProfileTabs(QTabWidget):
+    def sizeHint(self):
+        hint = super().sizeHint()
+        page = self.currentWidget()
+        if page is not None:
+            # Inactive pages are ignored for the minimum height by select_profile_tab.
+            chrome = self.minimumSizeHint().height() - page.minimumSizeHint().height()
+            hint.setHeight(chrome + page.sizeHint().height())
+        return hint
+
+    def heightForWidth(self, width):
+        page = self.currentWidget()
+        preferred = self.sizeHint().height()
+        if page is not None and (height := page.heightForWidth(width)) >= 0:
+            return preferred - page.sizeHint().height() + height
+        return preferred
 
 
 class MainWindow(QMainWindow):
@@ -293,12 +311,14 @@ class MainWindow(QMainWindow):
     def page_profile(self,layout):
         self.heading(layout,"지금의 나를 이해하는 것부터.","입력한 사실과 자기평가를 구분해, 목표의 출발점을 기록합니다.","PROFILE & BASELINE")
         self.profile_fields = {}
-        tabs = self.profile_tabs = QTabWidget()
+        tabs = self.profile_tabs = ProfileTabs()
+        tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         tabs.addTab(self.profile_common_tab(), "공통")
         tabs.addTab(self.profile_finance_tab(), "금융·자산")
         self.career_profile = CareerProfile(self.profile)
         tabs.addTab(self.career_profile, "커리어")
         tabs.setCurrentIndex(self.profile_tab)
+        self.select_profile_tab(tabs.currentIndex())
         tabs.currentChanged.connect(self.select_profile_tab)
         layout.addLayout(row(label("프로필은 내 PC와 내보낸 백업 파일에 저장됩니다.", "muted", True),
                              None, button("프로필 저장", self.save_profile, True)))
@@ -319,12 +339,49 @@ class MainWindow(QMainWindow):
 
     def select_profile_tab(self, index):
         self.profile_tab = index
+        for i in range(self.profile_tabs.count()):
+            height = QSizePolicy.Policy.Preferred if i == index else QSizePolicy.Policy.Ignored
+            self.profile_tabs.widget(i).setSizePolicy(QSizePolicy.Policy.Expanding, height)
+        self.profile_tabs.updateGeometry()
 
-    def profile_common_tab(self):
+    def profile_card(self, title, fields, hint=""):
+        card, layout = panel()
+        layout.addWidget(label(title, "sectionTitle", True))
+        for key, caption, editor in fields:
+            self.profile_fields[key] = editor
+            caption_label = label(caption, "muted", True)
+            if isinstance(editor, OptionalNumber):
+                caption_label.setBuddy(editor.known)
+                editor.known.setAccessibleName(f"{caption} 입력")
+                editor.editor.setAccessibleName(caption)
+            else:
+                caption_label.setBuddy(editor)
+            field = QVBoxLayout()
+            field.setSpacing(5)
+            field.addWidget(caption_label)
+            field.addWidget(editor)
+            layout.addLayout(field)
+        if hint:
+            layout.addWidget(label(hint, "muted", True))
+        layout.addStretch()
+        return card
+
+    def profile_cards_tab(self, left, right, extra=None):
         body = QWidget()
         layout = QVBoxLayout(body)
-        layout.setContentsMargins(16, 16, 16, 16)
-        form = QFormLayout()
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(14)
+        columns = QHBoxLayout()
+        columns.setSpacing(14)
+        columns.addWidget(left, 1)
+        columns.addWidget(right, 1)
+        layout.addLayout(columns)
+        if extra is not None:
+            layout.addWidget(extra)
+        layout.addStretch()
+        return body
+
+    def profile_common_tab(self):
         hours = QDoubleSpinBox()
         hours.setRange(0, 168)
         hours.setDecimals(1)
@@ -334,40 +391,33 @@ class MainWindow(QMainWindow):
         budget.setDecimals(0)
         budget.setGroupSeparatorShown(True)
         budget.setValue(self.profile["monthly_budget"])
-        for key, title, editor in (
+        identity = self.profile_card("기본 정보", (
             ("name", "이름·닉네임", QLineEdit(self.profile["name"])),
             ("age", "나이 (선택)", QLineEdit(self.profile["age"])),
+        ))
+        resources = self.profile_card("목표에 쓸 시간과 예산", (
             ("weekly_hours", "주당 순가용 시간 (시간)", hours),
             ("monthly_budget", "월 목표용 가용 예산 (원)", budget),
-        ):
-            self.profile_fields[key] = editor
-            form.addRow(title, editor)
-        layout.addLayout(form)
-        layout.addWidget(label("순가용 시간은 고정 일정·휴식을 제외하고 목표와 습관에 쓸 수 있는 시간입니다. 계획기는 이 시간을 7일에 균등 배분합니다.", "muted", True))
-        layout.addStretch()
-        return body
+        ), "고정 일정과 휴식을 제외한 시간을 입력하세요. 계획기는 이 시간을 7일에 균등 배분합니다.")
+        return self.profile_cards_tab(identity, resources)
 
     def profile_finance_tab(self):
-        body = QWidget()
-        layout = QVBoxLayout(body)
-        layout.setContentsMargins(16, 16, 16, 16)
-        form = QFormLayout()
-        for key, title in FINANCE_AMOUNTS.items():
-            editor = OptionalNumber(self.profile[key], maximum=10**16, decimals=0)
-            self.profile_fields[key] = editor
-            form.addRow(f"{title} (원)", editor)
+        amounts = {
+            key: (key, f"{title} (원)", OptionalNumber(self.profile[key], maximum=10**16, decimals=0))
+            for key, title in FINANCE_AMOUNTS.items()
+        }
         valuation_date = QLineEdit(self.profile["valuation_date"])
         valuation_date.setPlaceholderText("YYYY-MM-DD")
-        self.profile_fields["valuation_date"] = valuation_date
-        form.addRow("자산·부채 기준일", valuation_date)
         expenses = QLineEdit(self.profile["planned_expenses"])
-        expenses.setPlaceholderText("예시  ·  내년 이사비 300만 원")
-        self.profile_fields["planned_expenses"] = expenses
-        form.addRow("예정된 큰 지출", expenses)
-        layout.addLayout(form)
-        layout.addWidget(label("금액은 원화 환산 기준입니다. 확인된 금액만 입력하고 부채가 없다면 0원을 기록하세요. 이전에 저장한 금액의 통화와 실수령 기준을 확인해 주세요. 목표별 투자 시작금과 월 납입금은 목표에서 설정합니다.", "muted", True))
-        layout.addStretch()
-        return body
+        expenses.setPlaceholderText("예  ·  내년 이사비 300만 원")
+        balances = self.profile_card("자산·부채 현황", (
+            amounts["assets"], amounts["liabilities"], ("valuation_date", "자산·부채 기준일", valuation_date),
+        ), "원화로 환산한 금액을 기록하세요. 부채가 없다면 ‘입력’을 켜고 0원을 기록하세요.")
+        cashflow = self.profile_card("월 현금흐름", (
+            amounts["monthly_income"], amounts["monthly_expenses"],
+        ), "이전에 기록한 수입의 통화와 실수령 기준을 확인해 주세요. 목표별 투자 시작금과 월 납입금은 목표에서 설정합니다.")
+        planned = self.profile_card("예정 지출", (("planned_expenses", "예정된 큰 지출", expenses),))
+        return self.profile_cards_tab(balances, cashflow, planned)
 
     def page_goals(self,layout):
         self.heading(layout,"원하는 미래를, 확인 가능한 목표로.","결과물·수치·반복 목표를 나누고, 달성 여부를 직접 확인합니다.","GOALS & MILESTONES")
@@ -387,12 +437,42 @@ class MainWindow(QMainWindow):
         detail=button("목표 상세 분석·단계 보기",lambda:self.show_goal_analysis(next((g for g in self.goals if g["id"]==selected.currentData()),None)),True)
         detail.setEnabled(bool(selected.count()))
         layout.addLayout(row(selected,detail))
-        scale=QComboBox();scale.addItems(["월간","주간","일간"]);scale.setCurrentText(self.roadmap_scale)
-        scale.currentTextChanged.connect(self.set_roadmap_scale)
-        layout.addLayout(row(scale,None,button("미완료 일정 재배치",lambda:self.plan(True)),button("✦ 로드맵 초안 만들기",lambda:self.plan(False),True)))
+        periods = ("일간", "주간", "월간")
+        period_tabs = QTabBar()
+        period_tabs.setObjectName("roadmapPeriods")
+        period_tabs.setAccessibleName("로드맵 보기 단위")
+        period_tabs.setExpanding(False)
+        period_tabs.setElideMode(Qt.TextElideMode.ElideNone)
+        period_tabs.setUsesScrollButtons(False)
+        for period in periods:
+            period_tabs.addTab(period)
+        period_tabs.setCurrentIndex(periods.index(self.roadmap_scale))
+        layout.addLayout(row(period_tabs, None, button("미완료 일정 재배치", lambda: self.plan(True)),
+                             button("✦ 로드맵 초안 만들기", lambda: self.plan(False), True)))
         ids={g["id"] for g in self.filtered_goals()}
         tasks=[t for t in self.tasks if t["goal_id"] in ids]
         summary,sl=panel();sl.addWidget(label(f"주당 순가용 {self.profile['weekly_hours']:g}시간 · 현재 실행 과제 {len(tasks)}개 · 다음 28일 계획","sectionTitle",True));sl.addWidget(label("예상 시간은 수정 가능한 초안입니다. 장기 목표는 중간 성과부터 정하고 가까운 기간의 과제를 구체화합니다.","muted",True));layout.addWidget(summary)
+        task_area = QVBoxLayout()
+        task_area.setSpacing(0)
+        layout.addLayout(task_area)
+
+        def show_period(index):
+            self.roadmap_scale = periods[index]
+            previous = task_area.takeAt(0)
+            if previous is not None:
+                previous.widget().hide()
+                previous.widget().deleteLater()
+            content = QWidget()
+            sections = QVBoxLayout(content)
+            sections.setContentsMargins(0, 0, 0, 0)
+            sections.setSpacing(layout.spacing())
+            self.roadmap_tasks(sections, tasks)
+            task_area.addWidget(content)
+
+        period_tabs.currentChanged.connect(show_period)
+        show_period(period_tabs.currentIndex())
+
+    def roadmap_tasks(self, layout, tasks):
         groups=defaultdict(list)
         for t in sorted(tasks,key=lambda t:t.get("scheduled_date") or "9999"):
             value=t.get("scheduled_date")
@@ -563,9 +643,6 @@ class MainWindow(QMainWindow):
 
     def set_execution_date(self,d):
         self.execution_date=date(d.year(),d.month(),d.day());self.refresh()
-
-    def set_roadmap_scale(self,value):
-        self.roadmap_scale=value;self.refresh()
 
     def open_roadmap(self,goal):
         self.page_key="roadmap";self.category=goal["category"]

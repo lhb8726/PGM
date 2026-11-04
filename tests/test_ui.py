@@ -10,8 +10,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from PySide6.QtCore import QDate
-from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QLabel, QMessageBox, QScrollArea
+from PySide6.QtCore import QDate, Qt
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QLabel, QMessageBox, QScrollArea, QTabBar
 
 from pgm.app import MainWindow
 from pgm.career_profile import _CareerEntryDialog
@@ -111,6 +112,10 @@ class DesktopIntegrationTests(unittest.TestCase):
 
     def test_profile_edit_saves_to_sqlite_and_reloads_fields(self):
         self.window.navigate("profile")
+        self.app.processEvents()
+        tabs = self.window.profile_tabs
+        tab_top = tabs.y()
+        common_height = tabs.height()
         self.window.profile_fields["name"].setText("가상 통합 테스트")
         self.window.profile_fields["weekly_hours"].setValue(9.5)
         self.window.profile_tabs.setCurrentIndex(1)
@@ -119,6 +124,9 @@ class DesktopIntegrationTests(unittest.TestCase):
         self.window.profile_fields["monthly_expenses"].known.setChecked(False)
         self.window.profile_fields["valuation_date"].setText("2026-11-03")
         self.window.profile_tabs.setCurrentIndex(2)
+        self.app.processEvents()
+        self.assertEqual(tabs.y(), tab_top)
+        self.assertGreater(tabs.height(), common_height)
         career = self.window.career_profile
         career.occupation.setText("가상 프로젝트 개발자")
         career.desired_role.setText("가상 데이터 개발")
@@ -158,6 +166,38 @@ class DesktopIntegrationTests(unittest.TestCase):
         self.assertTrue(reloaded.introduction.isVisible())
         self.assertEqual(reloaded.introduction.toPlainText(), "가상 자기소개")
         self.assert_no_guard_error()
+
+    def test_roadmap_period_tabs_fit_and_group_tasks_in_place(self):
+        self.store.save_task({
+            "goal_id": self.store.goals()[0]["id"],
+            "title": "가상 기간 선택 확인 과제",
+            "scheduled_date": "2026-10-28",
+        })
+        self.window.resize(960, 600)
+        self.window.navigate("roadmap")
+        self.app.processEvents()
+        page = self.window.scroll.widget()
+        tabs = page.findChild(QTabBar, "roadmapPeriods")
+        self.assertEqual(tabs.currentIndex(), 1)
+        for index, (period, heading) in enumerate((
+            ("일간", "2026.10.28"),
+            ("주간", "2026.10.26 시작 주"),
+            ("월간", "2026년 10월"),
+        )):
+            with self.subTest(period=period):
+                rect = tabs.tabRect(index)
+                self.assertEqual(tabs.tabText(index), period)
+                self.assertTrue(tabs.rect().contains(rect))
+                self.assertGreater(rect.width(), tabs.fontMetrics().horizontalAdvance(period))
+                QTest.mouseClick(tabs, Qt.MouseButton.LeftButton, pos=rect.center())
+                self.app.processEvents()
+                self.assertEqual(tabs.currentIndex(), index)
+                self.assertEqual(self.window.roadmap_scale, period)
+                self.assertIs(self.window.scroll.widget(), page)
+                self.assertIn(heading, [item.text() for item in page.findChildren(QLabel)])
+        QTest.keyClick(tabs, Qt.Key.Key_Left)
+        self.assertEqual(self.window.roadmap_scale, "주간")
+        self.assertEqual(self.window.scroll.horizontalScrollBar().maximum(), 0)
 
     def test_coaching_summary_requires_opt_in_for_profile_context(self):
         self.store.save_profile({"career": {"desired_role": "가상프로필희망직무", "introduction": "가상프로필자기소개"}})
