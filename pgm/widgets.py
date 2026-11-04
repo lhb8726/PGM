@@ -53,12 +53,13 @@ def panel(hero=False):
 
 
 class ResponsiveColumns(QWidget):
-    def __init__(self, left, right):
+    def __init__(self, left, right, *, spacing=22, stretch=(3, 2)):
         super().__init__()
         self.columns = left, right
+        self.column_stretch = stretch
         self.arrangement = QBoxLayout(QBoxLayout.Direction.TopToBottom, self)
         self.arrangement.setContentsMargins(0, 0, 0, 0)
-        self.arrangement.setSpacing(22)
+        self.arrangement.setSpacing(spacing)
         self.arrangement.addLayout(left)
         self.arrangement.addLayout(right)
 
@@ -74,8 +75,8 @@ class ResponsiveColumns(QWidget):
         direction = QBoxLayout.Direction.LeftToRight if wide else QBoxLayout.Direction.TopToBottom
         if direction != self.arrangement.direction():
             self.arrangement.setDirection(direction)
-            self.arrangement.setStretch(0, 3 if wide else 0)
-            self.arrangement.setStretch(1, 2 if wide else 0)
+            for index, stretch in enumerate(self.column_stretch):
+                self.arrangement.setStretch(index, stretch if wide else 0)
 
 
 class CheckBoxLabel(WrappingLabel):
@@ -158,6 +159,6 @@ class ActivityChart(QWidget):
 
 def stat_card(title,value,detail,color="#b69af7",icon="◈"):
     w,layout=panel()
-    top=QHBoxLayout();top.addWidget(label(title,"muted"));top.addStretch();top.addWidget(pill(icon,color))
-    layout.addLayout(top);layout.addWidget(label(value,"statValue"));layout.addWidget(label(detail,"muted",True))
+    top=QHBoxLayout();top.addWidget(label(title,"muted",True),1);top.addWidget(pill(icon,color))
+    layout.addLayout(top);layout.addWidget(label(value,"statValue",True));layout.addWidget(label(detail,"muted",True))
     return w

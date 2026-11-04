@@ -246,9 +246,24 @@ class MainWindow(QMainWindow):
         done=sum(t["done"] for t in today)
         thisweek=[t for t in self.tasks if t.get("scheduled_date") and date.today()<=date.fromisoformat(t["scheduled_date"])<=date.today()+timedelta(days=6)]
         minutes=sum(t["minutes"] for t in thisweek)
-        stats=QHBoxLayout();stats.setSpacing(14)
-        for card in [stat_card("진행 중인 목표",str(len(active)),"각자의 속도로, 같은 방향으로","#b69af7","↗"),stat_card("오늘의 실행",f"{done} / {len(today)}","오늘 예정된 과제 기준","#82c5a3","✓"),stat_card("다음 7일 계획",f"{minutes/60:.1f}h",f"전체 분야 · 주당 가용 {self.profile['weekly_hours']:g}h","#70c4da","◷"),stat_card("이번 주 습관",str(sum(len([d for d in h['completions'] if date.today()-timedelta(days=6)<=date.fromisoformat(d)<=date.today()]) for h in self.habits)),"최근 7일의 수행 기록","#e5bd67","✦")]:stats.addWidget(card,1)
-        layout.addLayout(stats)
+        current_day = date.today()
+        week_start = current_day - timedelta(days=6)
+        habit_completions = sum(
+            week_start <= date.fromisoformat(day) <= current_day
+            for habit in self.habits for day in habit["completions"]
+        )
+        stats = [
+            stat_card("진행 중인 목표", str(len(active)), "각자의 속도로, 같은 방향으로", "#b69af7", "↗"),
+            stat_card("오늘의 실행", f"{done} / {len(today)}", "오늘 예정된 과제 기준", "#82c5a3", "✓"),
+            stat_card("다음 7일 계획", f"{minutes/60:.1f}h", f"전체 분야 · 주당 가용 {self.profile['weekly_hours']:g}h", "#70c4da", "◷"),
+            stat_card("이번 주 습관", str(habit_completions), "최근 7일의 수행 기록", "#e5bd67", "✦"),
+        ]
+        first_pair, second_pair = QHBoxLayout(), QHBoxLayout()
+        for pair, cards in ((first_pair, stats[:2]), (second_pair, stats[2:])):
+            pair.setSpacing(14)
+            for card in cards:
+                pair.addWidget(card, 1)
+        layout.addWidget(ResponsiveColumns(first_pair, second_pair, spacing=14, stretch=(1, 1)))
         hero,hl=panel(True)
         known=[state["value"] for g in goals if (state:=engine.progress_state(g,self.tasks))["value"] is not None]
         avg=sum(known)/len(known) if known else 0

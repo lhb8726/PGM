@@ -91,7 +91,11 @@ class DesktopIntegrationTests(unittest.TestCase):
                 if page == "profile":
                     self.window.profile_tabs.setCurrentIndex(2)
                 self.app.processEvents()
-                self.assertEqual(self.window.scroll.horizontalScrollBar().maximum(), 0)
+                scroll = self.window.scroll
+                if overflow := scroll.horizontalScrollBar().maximum():
+                    layout = scroll.widget().layout()
+                    minimum_widths = [layout.itemAt(i).minimumSize().width() for i in range(layout.count())]
+                    self.fail(f"{overflow}px horizontal overflow at {scroll.viewport().width()}px, page items {minimum_widths}")
         self.assertEqual(self.window.career_profile.editor_scroll.horizontalScrollBar().maximum(), 0)
 
         dialog = TaskDialog([{"id": 1, "title": long_korean}], parent=self.window)
