@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, QPoint, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QLabel, QMessageBox, QScrollArea, QTabBar
 
@@ -89,15 +89,32 @@ class DesktopIntegrationTests(unittest.TestCase):
         for page in ("dashboard", "today", "profile"):
             with self.subTest(page=page):
                 self.window.navigate(page)
-                if page == "profile":
-                    self.window.profile_tabs.setCurrentIndex(2)
-                self.app.processEvents()
-                scroll = self.window.scroll
-                if overflow := scroll.horizontalScrollBar().maximum():
-                    layout = scroll.widget().layout()
-                    minimum_widths = [layout.itemAt(i).minimumSize().width() for i in range(layout.count())]
-                    self.fail(f"{overflow}px horizontal overflow at {scroll.viewport().width()}px, page items {minimum_widths}")
+                for tab in (0, 1, 2) if page == "profile" else (None,):
+                    if tab is not None:
+                        self.window.profile_tabs.setCurrentIndex(tab)
+                    self.app.processEvents()
+                    scroll = self.window.scroll
+                    if overflow := scroll.horizontalScrollBar().maximum():
+                        layout = scroll.widget().layout()
+                        minimum_widths = [layout.itemAt(i).minimumSize().width() for i in range(layout.count())]
+                        self.fail(f"{overflow}px horizontal overflow at {scroll.viewport().width()}px, page items {minimum_widths}, tab {tab}")
         self.assertEqual(self.window.career_profile.editor_scroll.horizontalScrollBar().maximum(), 0)
+
+        # Simulate wider number editors from a different platform style.
+        tabs = self.window.profile_tabs
+        assets = self.window.profile_fields["assets"]
+        income = self.window.profile_fields["monthly_income"]
+        assets.setMinimumWidth(385)
+        income.setMinimumWidth(385)
+        tabs.setCurrentIndex(1)
+        finance_page = tabs.currentWidget()
+        self.window.resize(960, 600)
+        QTest.qWait(10)
+        self.assertEqual(self.window.scroll.horizontalScrollBar().maximum(), 0)
+        self.assertGreater(income.mapTo(finance_page, QPoint()).y(), assets.mapTo(finance_page, QPoint()).y())
+        self.window.resize(1440, 960)
+        QTest.qWait(10)
+        self.assertGreater(income.mapTo(finance_page, QPoint()).x(), assets.mapTo(finance_page, QPoint()).x())
 
         dialog = TaskDialog([{"id": 1, "title": long_korean}], parent=self.window)
         try:

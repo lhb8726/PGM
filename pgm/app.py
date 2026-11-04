@@ -83,7 +83,7 @@ class ProfileTabs(QTabWidget):
         hint = super().sizeHint()
         page = self.currentWidget()
         if page is not None:
-            # Inactive pages are ignored for the minimum height by select_profile_tab.
+            # Inactive pages are ignored for the minimum size by select_profile_tab.
             chrome = self.minimumSizeHint().height() - page.minimumSizeHint().height()
             hint.setHeight(chrome + page.sizeHint().height())
         return hint
@@ -340,8 +340,11 @@ class MainWindow(QMainWindow):
     def select_profile_tab(self, index):
         self.profile_tab = index
         for i in range(self.profile_tabs.count()):
-            height = QSizePolicy.Policy.Preferred if i == index else QSizePolicy.Policy.Ignored
-            self.profile_tabs.widget(i).setSizePolicy(QSizePolicy.Policy.Expanding, height)
+            page = self.profile_tabs.widget(i)
+            if i == index:
+                page.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            else:
+                page.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.profile_tabs.updateGeometry()
 
     def profile_card(self, title, fields, hint=""):
@@ -371,11 +374,10 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(body)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(14)
-        columns = QHBoxLayout()
-        columns.setSpacing(14)
-        columns.addWidget(left, 1)
-        columns.addWidget(right, 1)
-        layout.addLayout(columns)
+        first, second = QVBoxLayout(), QVBoxLayout()
+        first.addWidget(left)
+        second.addWidget(right)
+        layout.addWidget(ResponsiveColumns(first, second, spacing=14, stretch=(1, 1)))
         if extra is not None:
             layout.addWidget(extra)
         layout.addStretch()
