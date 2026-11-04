@@ -121,6 +121,7 @@ class StorageTests(unittest.TestCase):
                 "desired_role": "가상 웹 개발",
                 "skills": [{"name": "Python"}, {"name": "SQL", "evidence": "가상 학습 프로젝트"}],
                 "portfolio": [{"title": "가상 결과물", "url": "https://example.com/demo"}],
+                "visible_sections": ["education"],
             },
         }
         self.store.save_profile(data)
@@ -141,6 +142,7 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(self.store.profile(), original)
         self.assertEqual(self.store.profile()["liabilities"], 0)
         self.assertIsNone(self.store.profile()["monthly_expenses"])
+        self.assertEqual(self.store.profile()["career"]["visible_sections"], ["education"])
 
     def test_analysis_task_identity_and_start_date_remain_on_partial_update(self):
         goal_id = self.goal()

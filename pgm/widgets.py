@@ -1,16 +1,45 @@
 """Small native Qt visual components; all charts display stored records."""
 
+import re
+
 from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QBoxLayout, QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+
+
+_SOFT_BREAK = "\u200b"
+_LONG_TOKEN = re.compile(r"[^\s\u200b]{17,}")
+
+
+def _break_token(match):
+    token = match.group()
+    return _SOFT_BREAK.join(token[index:index + 16] for index in range(0, len(token), 16))
+
+
+class WrappingLabel(QLabel):
+    """Give unusually long tokens break points while keeping the original text."""
+
+    def __init__(self, text):
+        super().__init__()
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setWordWrap(True)
+        self.setText(text)
+
+    def setText(self, text):
+        self._original_text = text
+        display = _LONG_TOKEN.sub(_break_token, text)
+        super().setText(display)
+        self.setAccessibleName(text if display != text else "")
+
+    def text(self):
+        return self._original_text
 
 
 def label(text, name=None, wrap=False):
-    w = QLabel(str(text))
+    w = WrappingLabel(str(text)) if wrap else QLabel(str(text))
     w.setTextFormat(Qt.TextFormat.PlainText)
     if name:
         w.setObjectName(name)
-    w.setWordWrap(wrap)
     return w
 
 
@@ -21,6 +50,47 @@ def panel(hero=False):
     layout.setContentsMargins(21,19,21,19)
     layout.setSpacing(12)
     return w,layout
+
+
+class ResponsiveColumns(QWidget):
+    def __init__(self, left, right):
+        super().__init__()
+        self.columns = left, right
+        self.arrangement = QBoxLayout(QBoxLayout.Direction.TopToBottom, self)
+        self.arrangement.setContentsMargins(0, 0, 0, 0)
+        self.arrangement.setSpacing(22)
+        self.arrangement.addLayout(left)
+        self.arrangement.addLayout(right)
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        hint.setWidth(max(column.minimumSize().width() for column in self.columns))
+        return hint
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        required = sum(column.minimumSize().width() for column in self.columns) + self.arrangement.spacing()
+        wide = event.size().width() >= required
+        direction = QBoxLayout.Direction.LeftToRight if wide else QBoxLayout.Direction.TopToBottom
+        if direction != self.arrangement.direction():
+            self.arrangement.setDirection(direction)
+            self.arrangement.setStretch(0, 3 if wide else 0)
+            self.arrangement.setStretch(1, 2 if wide else 0)
+
+
+class CheckBoxLabel(WrappingLabel):
+    def __init__(self, text, checkbox):
+        super().__init__(text)
+        self.checkbox = checkbox
+        if checkbox.isEnabled():
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.checkbox.isEnabled():
+            self.checkbox.click()
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
 
 
 def pill(text,color="#b69af7"):

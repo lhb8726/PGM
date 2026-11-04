@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from html import escape
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QTimer, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QDialog, QFileDialog, QHBoxLayout, QHeaderView, QMessageBox, QPushButton,
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from .analysis import report_markdown
+from .dialogs import _fit_to_screen
 from .widgets import label, panel, pill
 
 
@@ -25,16 +27,38 @@ def _scroll():
     return area,layout
 
 
-def _table(headers, rows):
-    table = QTableWidget(len(rows),len(headers));table.setHorizontalHeaderLabels(headers)
-    table.setWordWrap(True);table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+def wrapped_table(headers, rows, *, compact_columns=(), minimum_height_cap=470):
+    table = QTableWidget(len(rows), len(headers))
+    table.setHorizontalHeaderLabels(headers)
+    table.setWordWrap(True)
+    table.setTextElideMode(Qt.TextElideMode.ElideNone)
+    table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+    table.setVerticalScrollMode(QTableWidget.ScrollMode.ScrollPerPixel)
     table.verticalHeader().setVisible(False)
-    table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+    header = table.horizontalHeader()
+    header.ensurePolished()
+    header.setMinimumSectionSize(max((header.sectionSizeHint(column) for column in range(len(headers))), default=0))
+    header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+    for column in compact_columns:
+        header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
     for i,values in enumerate(rows):
         for j,value in enumerate(values):
-            item = QTableWidgetItem(str(value));item.setTextAlignment(Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter);table.setItem(i,j,item)
-    table.resizeRowsToContents()
-    table.setMinimumHeight(min(470,max(150,table.horizontalHeader().height()+sum(table.rowHeight(i) for i in range(len(rows)))+10)))
+            text = str(value)
+            item = QTableWidgetItem(text)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            item.setToolTip("<qt>" + escape(text).replace("\n", "<br>") + "</qt>")
+            table.setItem(i, j, item)
+    def fit_rows():
+        table.resizeRowsToContents()
+        height = header.height() + table.verticalHeader().length() + 10
+        table.setMinimumHeight(min(minimum_height_cap, max(150, height)))
+
+    # Resize after the layout assigns column widths and when the window changes.
+    reflow = QTimer(table)
+    reflow.setSingleShot(True)
+    reflow.timeout.connect(fit_rows)
+    header.sectionResized.connect(lambda *_: reflow.start(0))
+    reflow.start(0)
     return table
 
 
@@ -44,22 +68,22 @@ class GoalAnalysisDialog(QDialog):
         super().__init__(parent)
         self.report=report;self.plan=plan
         self.setWindowTitle("목표 분석 · 상세 성장 로드맵")
-        self.setMinimumSize(840,630);self.resize(1060,850)
+        self.setMinimumSize(560,420);self.resize(1060,850)
         layout=QVBoxLayout(self);layout.setContentsMargins(25,24,25,20);layout.setSpacing(13)
         layout.addWidget(label(report["title"],"sectionTitle",True))
         tags=QHBoxLayout();tags.addWidget(pill(STATUS_LABELS.get(report.get("status"),"조건 확인")))
         tags.addWidget(pill("규칙 기반 분석 · 외부 AI 미연결","#82c5a3"));tags.addStretch()
         tags.addWidget(label(f"분석 기준 {report.get('generated_on','')}","muted"));layout.addLayout(tags)
-        layout.addWidget(label(report.get("summary",""),wrap=True))
         self.tabs=QTabWidget();layout.addWidget(self.tabs,1)
         area,body=_scroll();self.tabs.addTab(area,"진단·시나리오")
+        body.addWidget(label(report.get("summary",""),wrap=True))
         self._list(body,"입력된 사실·기록",report.get("facts",[]))
         if report.get("missing"):self._list(body,"먼저 확인할 정보",report["missing"],"#e5bd67")
         if report.get("warnings"):self._list(body,"제약·위험·조건 조정",report["warnings"],"#df9ab1")
         scenarios=report.get("scenarios",[])
         if scenarios:
             body.addWidget(label("조건을 바꾸면 달라지는 결과","sectionTitle"))
-            body.addWidget(_table(["시나리오","조건상 결과","필요 조건","계산 가정·해석"],[[s.get("name",""),s.get("result",""),s.get("requirement",""),s.get("note","")] for s in scenarios]))
+            body.addWidget(wrapped_table(["시나리오","조건상 결과","필요 조건","계산 가정·해석"],[[s.get("name",""),s.get("result",""),s.get("requirement",""),s.get("note","")] for s in scenarios]))
         finance=report.get("finance",{})
         comparison=finance.get("comparison",{})
         if comparison:
@@ -70,7 +94,7 @@ class GoalAnalysisDialog(QDialog):
                 def money(v):return "정보 부족" if v is None else f"{v:,.0f}원"
                 value=item.get("required_return")
                 rows.append([title,money(item.get("required_gross")),money(item.get("tax_at_target")),money(item.get("net_at_target")),"계산 불가·정보 부족" if value is None else f"{value:.2%}"])
-            body.addWidget(_table(["목표 기준","필요 평가액","계산상 최종 세금","세후 현금","필요 연복리"],rows))
+            body.addWidget(wrapped_table(["목표 기준","필요 평가액","계산상 최종 세금","세후 현금","필요 연복리"],rows))
             body.addWidget(label("단일 과세 가정의 예시입니다. 세무 원가·과세 조건을 확인하지 않으면 세후 숫자를 만들지 않습니다. 세율은 미래의 확정 세법을 뜻하지 않습니다.","muted",True))
         self._list(body,"계산 가정·제안의 범위",report.get("assumptions",[]));body.addStretch()
         area,body=_scroll();self.tabs.addTab(area,"단계별 로드맵")
@@ -90,22 +114,22 @@ class GoalAnalysisDialog(QDialog):
         if milestones:
             body.addWidget(label("가정에 따른 자산 점검표","sectionTitle"))
             body.addWidget(label("실제 성과 예측이 아닌 고정 수익률·납입액 계산입니다. 각 시점의 세후 금액은 독립적인 전량 청산 비교이며 매번 매도·재투자하는 경로가 아닙니다.","muted",True))
-            body.addWidget(_table(["기준일","경과 개월","평가액","세후 금액","연복리 가정"],[[m.get("date",""),m.get("month",""),f"{m['gross']:,.0f}원" if m.get("gross") is not None else "정보 부족",f"{m['net']:,.0f}원" if m.get("net") is not None else "정보 부족",f"{m['rate']:.0%}" if m.get("rate") is not None else "미입력"] for m in milestones]))
+            body.addWidget(wrapped_table(["기준일","경과 개월","평가액","세후 금액","연복리 가정"],[[m.get("date",""),m.get("month",""),f"{m['gross']:,.0f}원" if m.get("gross") is not None else "정보 부족",f"{m['net']:,.0f}원" if m.get("net") is not None else "정보 부족",f"{m['rate']:.0%}" if m.get("rate") is not None else "미입력"] for m in milestones]))
         body.addStretch()
         area,body=_scroll();self.tabs.addTab(area,"가까운 실행 계획")
         body.addWidget(label(plan.get("summary",""),"muted",True))
         self._list(body,"배치 조건·추가 확인",plan.get("warnings",[]),"#e5bd67")
         tasks=plan.get("tasks",[])
         if tasks:
-            body.addWidget(_table(["예정 날짜","실행 과제","초기 예상","완료 기준"],[[t.get("scheduled_date") or "미배정",t["title"],f"{t['minutes']}분",t.get("done_when","")] for t in tasks]))
+            body.addWidget(wrapped_table(["예정 날짜","실행 과제","초기 예상","완료 기준"],[[t.get("scheduled_date") or "미배정",t["title"],f"{t['minutes']}분",t.get("done_when","")] for t in tasks],compact_columns=(0,2)))
         else:
             body.addWidget(label("추가할 실행 과제가 없습니다. 기존 미완료 과제, 단계 시작일, 기한과 가용 시간을 확인하세요.","muted",True))
         body.addWidget(label("적용하면 위 과제만 추가합니다. 완료 기록과 기존 과제는 보존합니다. 금액 시나리오가 계산됐다는 사실만으로 그 현금흐름이나 수익률이 확보된 것은 아닙니다.","muted",True));body.addStretch()
         area,body=_scroll();self.tabs.addTab(area,"근거·자료")
         body.addWidget(label("아래는 저장된 참고 자료입니다. 앱이 열릴 때마다 인터넷에서 최신 내용을 자동 검증하는 기능은 아직 연결되지 않았습니다.","muted",True))
         for source in report.get("sources",[]):
-            card,cl=panel();cl.addWidget(label(source.get("title","참고 자료"),"sectionTitle",True));cl.addWidget(label(source.get("url",""),"muted",True));cl.addWidget(label("자료 확인일: "+(source.get("checked_on") or "사용자 제공·미검증"),"muted"))
             url=source.get("url","")
+            card,cl=panel();cl.addWidget(label(source.get("title","참고 자료"),"sectionTitle",True));cl.addWidget(label(url,"muted",True));cl.addWidget(label("자료 확인일: "+(source.get("checked_on") or "사용자 제공·미검증"),"muted"))
             if url.startswith(("https://","http://")):
                 b=QPushButton("자료 열기 ↗");b.clicked.connect(lambda _=False,u=url:QDesktopServices.openUrl(QUrl(u)));cl.addWidget(b)
             body.addWidget(card)
@@ -117,6 +141,10 @@ class GoalAnalysisDialog(QDialog):
         close=QPushButton("닫기");close.clicked.connect(self.reject);footer.addWidget(close)
         self.apply_button=QPushButton(f"실행 과제 {len(tasks)}개 추가");self.apply_button.setObjectName("primary");self.apply_button.setEnabled(bool(tasks));self.apply_button.clicked.connect(self.accept);footer.addWidget(self.apply_button)
         layout.addLayout(footer)
+
+    def showEvent(self, event):
+        _fit_to_screen(self)
+        super().showEvent(event)
 
     @staticmethod
     def _list(layout,title,items,color=None):

@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from PySide6.QtCore import QDate
-from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QLabel, QMessageBox
+from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QLabel, QMessageBox, QScrollArea
 
 from pgm.app import MainWindow
 from pgm.career_profile import _CareerEntryDialog
@@ -75,6 +75,36 @@ class DesktopIntegrationTests(unittest.TestCase):
             window.close()
             window.deleteLater()
 
+    def test_compact_window_keeps_long_user_text_within_page_width(self):
+        long_title = "SyntheticLongName" * 15
+        long_korean = "가상의긴한글데이터" * 21
+        self.store.save_profile({
+            "name": long_title,
+            "career": {"skills": [{"name": long_title, "level": long_korean}]},
+        })
+        self.store.save_habit({"title": long_korean, "category": "career", "weekdays": list(range(7))})
+        self.store.add_metric({"label": long_title[:180], "category": "career", "value": 2})
+        self.window.resize(1100, 740)
+        for page in ("dashboard", "today", "profile"):
+            with self.subTest(page=page):
+                self.window.navigate(page)
+                if page == "profile":
+                    self.window.profile_tabs.setCurrentIndex(2)
+                self.app.processEvents()
+                self.assertEqual(self.window.scroll.horizontalScrollBar().maximum(), 0)
+        self.assertEqual(self.window.career_profile.editor_scroll.horizontalScrollBar().maximum(), 0)
+
+        dialog = TaskDialog([{"id": 1, "title": long_korean}], parent=self.window)
+        try:
+            dialog.show()
+            dialog.resize(440, 350)
+            self.app.processEvents()
+            self.assertEqual(dialog.findChild(QScrollArea).horizontalScrollBar().maximum(), 0)
+            self.assertIn(long_korean, dialog.goal_input.toolTip())
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+
     def test_profile_edit_saves_to_sqlite_and_reloads_fields(self):
         self.window.navigate("profile")
         self.window.profile_fields["name"].setText("가상 통합 테스트")
@@ -88,7 +118,12 @@ class DesktopIntegrationTests(unittest.TestCase):
         career = self.window.career_profile
         career.occupation.setText("가상 프로젝트 개발자")
         career.desired_role.setText("가상 데이터 개발")
+        introduction = career.section_toggles["introduction"]
+        self.assertEqual(introduction.accessibleName(), "자기소개 추가")
+        introduction.click()
         career.introduction.setPlainText("가상 자기소개")
+        introduction.click()
+        career.section_toggles["certificates"].click()
 
         def record_skill(dialog):
             dialog.fields["name"].setText("가상 Python")
@@ -97,10 +132,7 @@ class DesktopIntegrationTests(unittest.TestCase):
             return dialog.result()
 
         with patch.object(_CareerEntryDialog, "exec", record_skill):
-            career.add_button.click()
-        self.assertEqual(career.entries.count(), 1)
-        career.section_selector.setCurrentIndex(career.section_selector.findData("certificates"))
-        self.assertEqual(career.entries.count(), 0)
+            career.record_add_buttons["skills"].click()
         self.window.save_profile()
         self.app.processEvents()
         saved = self.store.profile()
@@ -111,9 +143,16 @@ class DesktopIntegrationTests(unittest.TestCase):
         self.assertEqual(saved["valuation_date"], "2026-11-03")
         self.assertEqual(saved["career"]["skills"], [{"name": "가상 Python", "level": "프로젝트 활용"}])
         self.assertEqual(saved["career"]["introduction"], "가상 자기소개")
+        self.assertEqual(saved["career"]["visible_sections"], ["certificates"])
         self.assertEqual(self.window.profile_tabs.currentIndex(), 2)
         self.assertEqual(self.window.career_profile.occupation.text(), "가상 프로젝트 개발자")
         self.assertEqual(self.window.career_profile.desired_role.text(), "가상 데이터 개발")
+        reloaded = self.window.career_profile
+        self.assertFalse(reloaded.introduction.isVisible())
+        self.assertTrue(reloaded.record_add_buttons["certificates"].isVisible())
+        reloaded.section_toggles["introduction"].click()
+        self.assertTrue(reloaded.introduction.isVisible())
+        self.assertEqual(reloaded.introduction.toPlainText(), "가상 자기소개")
         self.assert_no_guard_error()
 
     def test_coaching_summary_requires_opt_in_for_profile_context(self):
@@ -188,13 +227,13 @@ class DesktopIntegrationTests(unittest.TestCase):
     def test_habit_checkbox_tracks_scheduled_day_and_removes_on_second_toggle(self):
         self.window.navigate("today")
         habit = next(habit for habit in self.store.habits() if date.today().weekday() in habit["weekdays"])
-        target = next(check for check in self.window.scroll.widget().findChildren(QCheckBox) if check.text() == habit["title"])
+        target = next(check for check in self.window.scroll.widget().findChildren(QCheckBox) if check.accessibleName() == habit["title"])
         self.assertTrue(target.isEnabled())
         target.setChecked(True)
         self.app.processEvents()
         saved = next(item for item in self.store.habits() if item["id"] == habit["id"])
         self.assertIn(date.today().isoformat(), saved["completions"])
-        target = next(check for check in self.window.scroll.widget().findChildren(QCheckBox) if check.text() == habit["title"])
+        target = next(check for check in self.window.scroll.widget().findChildren(QCheckBox) if check.accessibleName() == habit["title"])
         target.setChecked(False)
         self.app.processEvents()
         saved = next(item for item in self.store.habits() if item["id"] == habit["id"])

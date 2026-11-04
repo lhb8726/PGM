@@ -1,6 +1,7 @@
 """Editable Qt forms. Dialogs return plain dictionaries and never access storage."""
 from __future__ import annotations
 
+from html import escape
 from typing import Any
 
 from PySide6.QtCore import QDate, Qt
@@ -44,6 +45,23 @@ def _choices(items: dict[str, Any], value: Any = None) -> QComboBox:
     return combo
 
 
+def goal_selector(goals: list[dict], selected_id: int | None = None) -> QComboBox:
+    combo = QComboBox()
+    combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+    for goal in goals:
+        combo.addItem(goal["title"], goal["id"])
+        tooltip = "<qt>" + escape(goal["title"]) + "</qt>"
+        combo.setItemData(combo.count() - 1, tooltip, Qt.ItemDataRole.ToolTipRole)
+    _select(combo, selected_id)
+
+    def update_tooltip():
+        combo.setToolTip(combo.currentData(Qt.ItemDataRole.ToolTipRole) or "")
+
+    combo.currentIndexChanged.connect(update_tooltip)
+    update_tooltip()
+    return combo
+
+
 def _date(value: str | None = None, offset: int = 0) -> QDateEdit:
     parsed = QDate.fromString(str(value or ""), "yyyy-MM-dd")
     editor = QDateEdit(parsed if parsed.isValid() else QDate.currentDate().addDays(offset))
@@ -71,6 +89,17 @@ def _number(value: float = 0) -> QDoubleSpinBox:
     editor.setGroupSeparatorShown(True)
     editor.setValue(float(value or 0))
     return editor
+
+
+def _fit_to_screen(window: QWidget) -> None:
+    parent = window.parentWidget()
+    screen = parent.screen() if parent is not None else window.screen()
+    available = screen.availableGeometry().adjusted(20, 20, -20, -20)
+    window.resize(window.size().boundedTo(available.size()))
+    frame = window.frameGeometry()
+    if not available.contains(frame):
+        frame.moveCenter(available.center())
+        window.move(frame.topLeft())
 
 
 class OptionalNumber(QWidget):
@@ -112,7 +141,7 @@ class _FormDialog(QDialog):
     def __init__(self, title: str, subtitle: str, parent: QWidget | None = None):
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.setMinimumWidth(540)
+        self.setMinimumWidth(440)
         self.resize(600, 720)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(24, 24, 24, 20)
@@ -134,6 +163,7 @@ class _FormDialog(QDialog):
         self.form.setHorizontalSpacing(20)
         self.form.setVerticalSpacing(14)
         self.form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        self.form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         scroll.setWidget(body)
         outer.addWidget(scroll, 1)
@@ -151,6 +181,10 @@ class _FormDialog(QDialog):
         buttons.addWidget(cancel)
         buttons.addWidget(self.save_button)
         outer.addLayout(buttons)
+
+    def showEvent(self, event):
+        _fit_to_screen(self)
+        super().showEvent(event)
 
     def _required(self, field: QWidget, message: str) -> bool:
         QMessageBox.warning(self, "입력 내용을 확인해 주세요", message)
@@ -189,6 +223,7 @@ class GoalDialog(_FormDialog):
         numeric = QFormLayout(self.numeric_box)
         numeric.setContentsMargins(0, 8, 0, 8)
         numeric.setSpacing(12)
+        numeric.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.baseline_input = _number(g.get("baseline", 0))
         self.current_input = _number(g.get("current", g.get("baseline", 0)))
         self.target_input = _number(g.get("target", 100))
@@ -226,6 +261,7 @@ class GoalDialog(_FormDialog):
         common = QFormLayout(context)
         common.setContentsMargins(12, 14, 12, 14)
         common.setVerticalSpacing(10)
+        common.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.context_input = _text(p["context"], "현재 상황과 목표를 선택한 이유", 52)
         self.requirements_input = _text(p["requirements"], "공식 시험 기준, 목표 직무 요건, 결과물 필수 항목 등", 52)
         self.evidence_input = _text(p["evidence"], "시험 결과·현재 결과물·측정 기록과 확인 날짜", 52)
@@ -241,6 +277,7 @@ class GoalDialog(_FormDialog):
         allocation = QFormLayout(resources)
         allocation.setContentsMargins(12, 14, 12, 14)
         allocation.setVerticalSpacing(14)
+        allocation.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.estimated_hours_input = OptionalNumber(p["estimated_hours"], maximum=1e7)
         self.weekly_hours_input = OptionalNumber(p["weekly_hours"], maximum=168)
         self.monthly_cost_input = OptionalNumber(p["monthly_cost"], decimals=0)
@@ -256,6 +293,7 @@ class GoalDialog(_FormDialog):
         money = QFormLayout(finance)
         money.setContentsMargins(12, 14, 12, 14)
         money.setVerticalSpacing(10)
+        money.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.monthly_contribution_input = OptionalNumber(p["monthly_contribution"], decimals=0)
         self.contribution_source_input = QLineEdit(p["contribution_source"])
         self.contribution_source_input.setPlaceholderText("세후 소득·별도 수입 등 신규 납입 재원과 지속 가능 기간")
@@ -375,10 +413,7 @@ class TaskDialog(_FormDialog):
         self.original = dict(task or {})
         super().__init__("과제 수정" if task else "실행 과제 추가", "과제를 목표에 연결하고 날짜와 예상 시간을 정하세요.", parent)
         t = self.original
-        self.goal_input = QComboBox()
-        for goal in goals:
-            self.goal_input.addItem(goal["title"], goal["id"])
-        _select(self.goal_input, t.get("goal_id"))
+        self.goal_input = goal_selector(goals, t.get("goal_id"))
         self.title_input = QLineEdit(str(t.get("title", "")))
         self.title_input.setPlaceholderText("예: 프로젝트 주제와 데이터셋 선정")
         self.scheduled_input = QCheckBox("날짜 지정")

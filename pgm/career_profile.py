@@ -2,24 +2,22 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QFormLayout,
     QHBoxLayout,
     QLineEdit,
-    QListWidget,
     QMessageBox,
     QPushButton,
-    QStackedWidget,
+    QScrollArea,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from .dialogs import _FormDialog, _text
-from .profile_schema import CAREER_SECTIONS, normalize_career
+from .profile_schema import CAREER_SECTIONS, OPTIONAL_CAREER_SECTIONS, normalize_career
 from .widgets import label, panel
 
 
@@ -74,101 +72,133 @@ class _CareerEntryDialog(_FormDialog):
 
 
 class CareerProfile(QWidget):
-    """Edit structured career information alongside earlier profile memos."""
+    """Edit the visible career sections from a separate section menu."""
 
     def __init__(self, profile: dict, parent: QWidget | None = None):
         super().__init__(parent)
         career = profile.get("career") or {}
-        self._records = {
-            key: [dict(entry) for entry in career.get(key, [])]
-            for key in CAREER_SECTIONS
-        }
+        self._records = {key: [dict(entry) for entry in career.get(key, [])] for key in CAREER_SECTIONS}
+        inferred_sections = [key for key in OPTIONAL_CAREER_SECTIONS if key in career]
+        self._visible_sections = set(career.get("visible_sections", inferred_sections))
+        self._cards = {}
+        self._record_lists = {}
+        self._section_links = {}
+        self.section_toggles = {}
+        self.record_add_buttons = {}
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        card, content = panel()
-        layout.addWidget(card)
-        content.addWidget(label("커리어 프로필", "sectionTitle"))
-        content.addWidget(label("직무에 필요한 근거와 경험을 항목별로 기록하세요. 변경 내용은 프로필 저장으로 반영됩니다.", "muted", True))
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(14)
 
+        self.editor_scroll = QScrollArea()
+        self.editor_scroll.setWidgetResizable(True)
+        self.editor_scroll.setMinimumHeight(500)
+        self.editor_scroll.setAccessibleName("커리어 항목 편집")
+        self._editor = QWidget()
+        self.editor_scroll.setWidget(self._editor)
+        layout.addWidget(self.editor_scroll, 1)
+        self._content = QVBoxLayout(self._editor)
+        self._content.setContentsMargins(0, 0, 8, 0)
+        self._content.setSpacing(12)
+
+        roles = self._section("desired_role", "희망직무")
         self.occupation = QLineEdit(profile.get("occupation") or "")
         self.occupation.setPlaceholderText("현재 직업 또는 역할")
         self.desired_role = QLineEdit(career.get("desired_role", ""))
-        self.desired_role.setPlaceholderText("희망 직무")
-        roles = QFormLayout()
-        roles.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        roles.addRow("현재 직업·역할", self.occupation)
-        roles.addRow("희망 직무", self.desired_role)
-        content.addLayout(roles)
+        self.desired_role.setPlaceholderText("예  ·  데이터 분석가")
+        for title, field in (("현재 직업·역할", self.occupation), ("희망직무", self.desired_role)):
+            field.setAccessibleName(title)
+            roles.addWidget(label(title, "muted", True))
+            roles.addWidget(field)
 
-        section_row = QHBoxLayout()
-        self.section_selector = QComboBox()
-        self.section_selector.setAccessibleName("커리어 기록 분류")
         for key, (title, _fields) in CAREER_SECTIONS.items():
-            self.section_selector.addItem(title, key)
-        section_row.addWidget(self.section_selector, 1)
-        self.record_count = label("", "muted")
-        section_row.addWidget(self.record_count)
-        content.addLayout(section_row)
+            add = QPushButton("＋ 기록 추가")
+            add.setAccessibleName(f"{title} 기록 추가")
+            add.clicked.connect(lambda _checked=False, section=key: self._open_entry(section))
+            self.record_add_buttons[key] = add
+            content = self._section(key, title, add)
+            self._record_lists[key] = QVBoxLayout()
+            content.addLayout(self._record_lists[key])
 
-        self.entries = QListWidget()
-        self.entries.setAccessibleName("선택한 분류의 기록")
-        self.entries.setAlternatingRowColors(True)
-        self.entries.setTextElideMode(Qt.TextElideMode.ElideRight)
-        self.entries.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.empty_state = label("아직 기록이 없습니다. 항목을 추가해 보세요.", "muted", True)
-        self.empty_state.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.record_view = QStackedWidget()
-        self.record_view.setMinimumHeight(110)
-        self.record_view.setMaximumHeight(160)
-        self.record_view.addWidget(self.entries)
-        self.record_view.addWidget(self.empty_state)
-        content.addWidget(self.record_view)
+        introduction = self._section("introduction", "자기소개")
+        self.introduction = _text(career.get("introduction", ""), "경험과 강점을 소개하세요.", 110)
+        self.introduction.setAccessibleName("자기소개")
+        introduction.addWidget(self.introduction)
+        self._add_legacy_memos(profile)
+        self._content.addStretch()
 
-        actions = QHBoxLayout()
-        actions.addStretch()
-        self.add_button = QPushButton("＋ 기록 추가")
-        self.add_button.clicked.connect(lambda: self._open_entry())
-        self.edit_button = QPushButton("선택 수정")
-        self.edit_button.clicked.connect(self._edit_selected)
-        self.delete_button = QPushButton("선택 삭제")
-        self.delete_button.clicked.connect(self._delete_selected)
-        for button in (self.add_button, self.edit_button, self.delete_button):
-            actions.addWidget(button)
-        content.addLayout(actions)
+        menu, items = panel()
+        items.setContentsMargins(10, 12, 10, 12)
+        items.setSpacing(4)
+        items.addWidget(label("커리어 항목", "sectionTitle"))
+        names = {
+            "desired_role": "희망직무",
+            **{key: title for key, (title, _) in CAREER_SECTIONS.items()},
+            "introduction": "자기소개",
+        }
+        for key, title in names.items():
+            entry = QHBoxLayout()
+            entry.setSpacing(4)
+            link = QPushButton(title)
+            link.setStyleSheet("text-align: left; padding: 3px 7px;")
+            link.clicked.connect(lambda _checked=False, section=key: self._jump_to(section))
+            self._section_links[key] = link
+            entry.addWidget(link, 1)
+            if key in OPTIONAL_CAREER_SECTIONS:
+                toggle = QPushButton()
+                toggle.setMinimumWidth(30)
+                toggle.setStyleSheet("padding: 3px 6px;")
+                toggle.clicked.connect(lambda _checked=False, section=key: self._toggle_section(section))
+                self.section_toggles[key] = toggle
+                entry.addWidget(toggle)
+            items.addLayout(entry)
+            self._sync_section(key)
+        items.addWidget(label("−로 숨긴 항목은 기록이 보관됩니다. ＋로 다시 표시할 수 있습니다.", "muted", True))
+        menu.setMinimumWidth(176)
+        layout.addWidget(menu, 0, Qt.AlignmentFlag.AlignTop)
 
-        self.introduction = _text(career.get("introduction", ""), "경험과 강점을 짧게 소개하세요.", 78)
-        introduction_form = QFormLayout()
-        introduction_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        introduction_form.addRow("자기소개", self.introduction)
-        content.addLayout(introduction_form)
+    def _section(self, key: str, title: str, action: QPushButton | None = None) -> QVBoxLayout:
+        card, content = panel()
+        content.setContentsMargins(14, 12, 14, 12)
+        content.setSpacing(8)
+        heading = label(title, "sectionTitle", True)
+        if action is None:
+            content.addWidget(heading)
+        else:
+            header = QHBoxLayout()
+            header.addWidget(heading, 1)
+            header.addWidget(action)
+            content.addLayout(header)
+        self._cards[key] = card
+        self._content.addWidget(card)
+        return content
 
-        memo_button = QPushButton("경력·역량 메모 편집")
-        memo_button.setCheckable(True)
-        memo_button.setObjectName("ghost")
-        content.addWidget(memo_button, 0, Qt.AlignmentFlag.AlignLeft)
+    def _add_legacy_memos(self, profile: dict) -> None:
+        card, content = panel()
+        toggle = QPushButton("경력·역량 메모 편집")
+        toggle.setCheckable(True)
+        toggle.setObjectName("ghost")
+        content.addWidget(toggle, 0, Qt.AlignmentFlag.AlignLeft)
         memo_panel = QWidget()
-        memos = QFormLayout(memo_panel)
+        memos = QVBoxLayout(memo_panel)
         memos.setContentsMargins(0, 0, 0, 0)
-        memos.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.experience = _text(profile.get("experience", ""), height=70)
         self.skills = _text(profile.get("skills", ""), height=70)
-        memos.addRow("경력·경험 메모", self.experience)
-        memos.addRow("역량·자격 메모", self.skills)
-        memo_panel.hide()
+        for title, field in (("경력·경험 메모", self.experience), ("역량·자격 메모", self.skills)):
+            field.setAccessibleName(title)
+            memos.addWidget(label(title, "muted"))
+            memos.addWidget(field)
         content.addWidget(memo_panel)
-        memo_button.toggled.connect(memo_panel.setVisible)
-
-        self.section_selector.currentIndexChanged.connect(lambda: self._refresh_records())
-        self.entries.currentRowChanged.connect(self._update_actions)
-        self.entries.itemDoubleClicked.connect(lambda: self._edit_selected())
-        self._refresh_records()
+        memo_panel.hide()
+        toggle.toggled.connect(memo_panel.setVisible)
+        self._content.addWidget(card)
 
     def values(self) -> dict:
         career = normalize_career({
             **self._records,
             "desired_role": self.desired_role.text(),
             "introduction": self.introduction.toPlainText(),
+            "visible_sections": [key for key in OPTIONAL_CAREER_SECTIONS if key in self._visible_sections],
         })
         return {
             "occupation": self.occupation.text().strip(),
@@ -177,41 +207,80 @@ class CareerProfile(QWidget):
             "career": career,
         }
 
-    def _refresh_records(self, select_row: int = -1) -> None:
-        section = self.section_selector.currentData()
+    def _sync_section(self, section: str) -> None:
+        visible = section not in OPTIONAL_CAREER_SECTIONS or section in self._visible_sections
+        self._cards[section].setVisible(visible)
+        link = self._section_links[section]
+        link.setEnabled(visible)
+        if toggle := self.section_toggles.get(section):
+            action = "숨기기" if visible else "추가"
+            toggle.setText("−" if visible else "＋")
+            toggle.setAccessibleName(f"{link.text()} {action}")
+            toggle.setToolTip(toggle.accessibleName())
+        if visible and section in self._record_lists:
+            self._refresh_records(section)
+
+    def _toggle_section(self, section: str) -> None:
+        if section in self._visible_sections:
+            self._visible_sections.remove(section)
+            self._sync_section(section)
+        else:
+            self._visible_sections.add(section)
+            self._sync_section(section)
+            self._jump_to(section)
+
+    def _jump_to(self, section: str) -> None:
+        card = self._cards[section]
+
+        def scroll_to_card():
+            if not card.isHidden():
+                top = card.mapTo(self._editor, QPoint()).y()
+                self.editor_scroll.verticalScrollBar().setValue(top)
+
+        QTimer.singleShot(0, self, scroll_to_card)
+
+    def _refresh_records(self, section: str) -> None:
+        listing = self._record_lists[section]
+        while listing.count():
+            previous = listing.takeAt(0).widget()
+            previous.hide()
+            previous.deleteLater()
         records = self._records[section]
-        self.entries.clear()
-        fields = CAREER_SECTIONS[section][1]
-        for entry in records:
-            parts = [entry[key] for key, _title in fields if entry.get(key) and key not in {"details", "evidence"}]
-            self.entries.addItem("  ·  ".join(parts))
-        self.record_count.setText(f"{len(records)}개 기록")
-        self.record_view.setCurrentWidget(self.entries if records else self.empty_state)
-        if 0 <= select_row < len(records):
-            self.entries.setCurrentRow(select_row)
-        self._update_actions(self.entries.currentRow())
+        if not records:
+            listing.addWidget(label("기록을 추가해 주세요.", "muted", True))
+            return
 
-    def _update_actions(self, row: int) -> None:
-        self.edit_button.setEnabled(row >= 0)
-        self.delete_button.setEnabled(row >= 0)
+        _title, fields = CAREER_SECTIONS[section]
+        first = fields[0][0]
+        for index, entry in enumerate(records):
+            card, content = panel()
+            content.setContentsMargins(10, 9, 10, 9)
+            summary = QVBoxLayout()
+            summary.setSpacing(4)
+            summary.addWidget(label(entry[first], wrap=True))
+            details = [f"{title}  {entry[key]}" for key, title in fields[1:]
+                       if entry.get(key) and key not in {"details", "evidence", "url"}]
+            if details:
+                summary.addWidget(label("  ·  ".join(details), "muted", True))
+            actions = QHBoxLayout()
+            actions.addLayout(summary, 1)
+            for title, callback in (("수정", self._open_entry), ("삭제", self._delete_record)):
+                action = QPushButton(title)
+                action.setObjectName("ghost")
+                action.setAccessibleName(f"{entry[first]} {title}")
+                action.clicked.connect(lambda _checked=False, cb=callback, i=index: cb(section, i))
+                actions.addWidget(action, 0, Qt.AlignmentFlag.AlignTop)
+            content.addLayout(actions)
+            listing.addWidget(card)
 
-    def _open_entry(self, row: int | None = None) -> None:
-        section = self.section_selector.currentData()
+    def _open_entry(self, section: str, row: int | None = None) -> None:
         dialog = _CareerEntryDialog(section, self._records[section], row, self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        self._records[section] = dialog.records
-        self._refresh_records(len(dialog.records) - 1 if row is None else row)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._records[section] = dialog.records
+            self._refresh_records(section)
+        dialog.deleteLater()
 
-    def _edit_selected(self) -> None:
-        row = self.entries.currentRow()
-        if row >= 0:
-            self._open_entry(row)
-
-    def _delete_selected(self) -> None:
-        row = self.entries.currentRow()
-        if row < 0:
-            return
+    def _delete_record(self, section: str, row: int) -> None:
         answer = QMessageBox.question(
             self,
             "커리어 기록 삭제",
@@ -220,6 +289,5 @@ class CareerProfile(QWidget):
             QMessageBox.StandardButton.Cancel,
         )
         if answer == QMessageBox.StandardButton.Yes:
-            records = self._records[self.section_selector.currentData()]
-            del records[row]
-            self._refresh_records(min(row, len(records) - 1))
+            del self._records[section][row]
+            self._refresh_records(section)

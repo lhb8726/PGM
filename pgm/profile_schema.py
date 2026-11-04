@@ -30,6 +30,7 @@ CAREER_SECTIONS = {
                              ("details", "문제·기여·성과"))),
     "preferences": ("취업우대/병역", (("kind", "구분"), ("status", "해당 상태"), ("details", "비고"))),
 }
+OPTIONAL_CAREER_SECTIONS = tuple(key for key in CAREER_SECTIONS if key != "skills") + ("introduction",)
 
 
 def _career_text(value, label, limit=300):
@@ -61,7 +62,7 @@ def _career_link(value):
 
 
 def normalize_career(data: dict) -> dict:
-    if not isinstance(data, dict) or data.keys() - (CAREER_SECTIONS.keys() | {"desired_role", "introduction"}):
+    if not isinstance(data, dict) or data.keys() - (CAREER_SECTIONS.keys() | {"desired_role", "introduction", "visible_sections"}):
         raise ValueError("커리어 프로필에 지원하지 않는 항목이 있습니다.")
 
     result = {}
@@ -98,4 +99,12 @@ def normalize_career(data: dict) -> dict:
             normalized.append(values)
         if normalized:
             result[key] = normalized
+
+    if "visible_sections" in data:
+        sections = data["visible_sections"]
+        if not isinstance(sections, list) or any(section not in OPTIONAL_CAREER_SECTIONS for section in sections):
+            raise ValueError("표시할 커리어 항목을 확인하세요.")
+        selected = [key for key in OPTIONAL_CAREER_SECTIONS if key in sections]
+        if selected != [key for key in OPTIONAL_CAREER_SECTIONS if key in result]:
+            result["visible_sections"] = selected
     return result

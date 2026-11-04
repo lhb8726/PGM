@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMessageBox, QTableWidget
 
 from pgm.analysis import analyze_goal
@@ -79,6 +80,39 @@ class GoalAnalysisIntegrationTests(unittest.TestCase):
             self.assertIn("자동 검증", texts)
             self.assertTrue(all(task["done_when"] and task["rationale"] for task in plan["tasks"]))
             self.warning.assert_not_called()
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+
+    def test_narrow_report_reflows_long_cells_and_keeps_source_links_readable(self):
+        long_note = "가상 완료 기준을 점검하고 필요한 증빙을 항목별로 확인합니다. " * 20
+        report = {
+            "title": "가상 좁은 창 분석",
+            "generated_on": date.today().isoformat(),
+            "scenarios": [{"name": "가상 조건", "note": long_note}],
+            "sources": [{"title": "가상 링크", "url": "https://example.com/" + "a" * 1600}],
+        }
+        dialog = GoalAnalysisDialog(report, {"tasks": []}, self.window)
+        try:
+            dialog.show()
+            dialog.resize(560, 420)
+            QTest.qWait(20)
+            self.assertEqual(dialog.width(), 560)
+            overview = dialog.tabs.currentWidget()
+            table = overview.findChild(QTableWidget)
+            automatic_height = table.rowHeight(0)
+            table.resizeRowsToContents()
+            self.assertGreaterEqual(automatic_height, table.rowHeight(0))
+            self.assertGreater(table.rowHeight(0), table.viewport().height())
+            self.assertEqual(table.verticalScrollMode(), QTableWidget.ScrollMode.ScrollPerPixel)
+            self.assertGreater(table.verticalScrollBar().maximum(), 0)
+            header = table.horizontalHeader()
+            for column in range(table.columnCount()):
+                self.assertGreaterEqual(header.sectionSize(column), header.sectionSizeHint(column))
+
+            dialog.tabs.setCurrentIndex(3)
+            QTest.qWait(20)
+            self.assertEqual(dialog.tabs.currentWidget().horizontalScrollBar().maximum(), 0)
         finally:
             dialog.close()
             dialog.deleteLater()
