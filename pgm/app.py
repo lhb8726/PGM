@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDateEdit, QDialog, QDoubleSpinBox,
     QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
     QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton,
-    QScrollArea, QSizePolicy, QSystemTrayIcon, QTableWidget, QTableWidgetItem,
+    QScrollArea, QSizePolicy, QSystemTrayIcon, QTableWidget, QTableWidgetItem, QTabWidget,
     QTextEdit, QVBoxLayout, QWidget,
 )
 
@@ -24,8 +24,10 @@ from . import __version__
 from . import engine
 from .analysis import analyze_goal
 from .analysis_view import GoalAnalysisDialog
+from .career_profile import CareerProfile
 from .constants import CATEGORIES, HORIZONS, KINDS, NAVIGATION, PRIORITIES
-from .dialogs import GoalDialog, HabitDialog, MetricDialog, ReviewDialog, TaskDialog
+from .dialogs import GoalDialog, HabitDialog, MetricDialog, OptionalNumber, ReviewDialog, TaskDialog
+from .profile_schema import FINANCE_AMOUNTS
 from .storage import Store
 from .theme import apply_theme
 from .widgets import ActivityChart, Ring, label, panel, pill, stat_card
@@ -89,6 +91,7 @@ class MainWindow(QMainWindow):
         self.goal_search=""
         self.execution_date=date.today()
         self.roadmap_scale="주간"
+        self.profile_tab = 0
         self.notified_day=None
         self.setWindowTitle(f"PGM · Personal Growth Workspace {__version__}")
         self.setWindowIcon(QIcon(str(Path(__file__).parent/"assets"/"icon.svg")))
@@ -272,16 +275,17 @@ class MainWindow(QMainWindow):
 
     def page_profile(self,layout):
         self.heading(layout,"지금의 나를 이해하는 것부터.","입력한 사실과 자기평가를 구분해, 목표의 출발점을 기록합니다.","PROFILE & BASELINE")
-        w,l=panel();form=QGridLayout();form.setHorizontalSpacing(24);form.setVerticalSpacing(12);self.profile_fields={}
-        fields=[("name","이름·닉네임","text"),("occupation","직업·현재 역할","text"),("age","나이 (선택)","text"),("experience","경력·경험","text"),("skills","현재 역량·보유 자격","text"),("weekly_hours","주당 순가용 시간 (시간)","hours"),("monthly_budget","월 목표용 가용 예산","money"),("assets","현재 자산 합계","money"),("liabilities","현재 부채 합계","money"),("monthly_income","월 수입","money"),("monthly_expenses","월 지출","money")]
-        for i,(key,title,kind) in enumerate(fields):
-            box=QVBoxLayout();box.setSpacing(6);box.addWidget(label(title,"muted"))
-            if kind=="text":editor=QLineEdit(str(self.profile.get(key,"") or ""))
-            else:
-                editor=QDoubleSpinBox();editor.setRange(0,168 if kind=="hours" else 1e12);editor.setDecimals(1 if kind=="hours" else 0);editor.setGroupSeparatorShown(True);editor.setValue(float(self.profile.get(key,0)))
-            self.profile_fields[key]=editor;box.addWidget(editor);form.addLayout(box,i//2,i%2)
-        l.addLayout(form);l.addWidget(label("순가용 시간은 고정 일정·휴식을 제외하고 목표와 앱에 등록한 습관에 쓸 수 있는 시간입니다. 현재 계획기는 이 시간을 7일에 균등 배분합니다. 금액은 동일 통화 기준으로 직접 기록하며 계획의 예산 검증은 아직 지원하지 않습니다.","muted",True))
-        l.addWidget(button("프로필 저장",self.save_profile,True),0,Qt.AlignmentFlag.AlignRight);layout.addWidget(w)
+        self.profile_fields = {}
+        tabs = self.profile_tabs = QTabWidget()
+        tabs.addTab(self.profile_common_tab(), "공통")
+        tabs.addTab(self.profile_finance_tab(), "금융·자산")
+        self.career_profile = CareerProfile(self.profile)
+        tabs.addTab(self.career_profile, "커리어")
+        tabs.setCurrentIndex(self.profile_tab)
+        tabs.currentChanged.connect(self.select_profile_tab)
+        layout.addLayout(row(label("프로필은 내 PC와 내보낸 백업 파일에 저장됩니다.", "muted", True),
+                             None, button("프로필 저장", self.save_profile, True)))
+        layout.addWidget(tabs)
         self.section(layout,"분야별 현재 상태",button("＋ 근거·측정값 기록",self.add_metric,ghost=True))
         grid=QGridLayout();grid.setSpacing(15)
         for i,d in enumerate(engine.diagnose(self.profile,self.metrics,self.goals)):
@@ -295,6 +299,58 @@ class MainWindow(QMainWindow):
             self.section(layout,"최근 진단 근거")
             for m in sorted(self.metrics,key=lambda m:m["recorded_date"],reverse=True)[:8]:
                 card,cl=panel();cl.addWidget(label(f"{CATEGORIES[m['category']]['name']} · {m['label']}  {number(m['value'])}{m['unit']}"));cl.addWidget(label(f"{m['recorded_date']}  ·  { {'self':'자기평가','measured':'측정 기록','document':'문서·결과물'}[m['evidence_kind']] }  ·  {m['source']}","muted",True));layout.addWidget(card)
+
+    def select_profile_tab(self, index):
+        self.profile_tab = index
+
+    def profile_common_tab(self):
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(16, 16, 16, 16)
+        form = QFormLayout()
+        hours = QDoubleSpinBox()
+        hours.setRange(0, 168)
+        hours.setDecimals(1)
+        hours.setValue(self.profile["weekly_hours"])
+        budget = QDoubleSpinBox()
+        budget.setRange(0, 10**16)
+        budget.setDecimals(0)
+        budget.setGroupSeparatorShown(True)
+        budget.setValue(self.profile["monthly_budget"])
+        for key, title, editor in (
+            ("name", "이름·닉네임", QLineEdit(self.profile["name"])),
+            ("age", "나이 (선택)", QLineEdit(self.profile["age"])),
+            ("weekly_hours", "주당 순가용 시간 (시간)", hours),
+            ("monthly_budget", "월 목표용 가용 예산 (원)", budget),
+        ):
+            self.profile_fields[key] = editor
+            form.addRow(title, editor)
+        layout.addLayout(form)
+        layout.addWidget(label("순가용 시간은 고정 일정·휴식을 제외하고 목표와 습관에 쓸 수 있는 시간입니다. 계획기는 이 시간을 7일에 균등 배분합니다.", "muted", True))
+        layout.addStretch()
+        return body
+
+    def profile_finance_tab(self):
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(16, 16, 16, 16)
+        form = QFormLayout()
+        for key, title in FINANCE_AMOUNTS.items():
+            editor = OptionalNumber(self.profile[key], maximum=10**16, decimals=0)
+            self.profile_fields[key] = editor
+            form.addRow(f"{title} (원)", editor)
+        valuation_date = QLineEdit(self.profile["valuation_date"])
+        valuation_date.setPlaceholderText("YYYY-MM-DD")
+        self.profile_fields["valuation_date"] = valuation_date
+        form.addRow("자산·부채 기준일", valuation_date)
+        expenses = QLineEdit(self.profile["planned_expenses"])
+        expenses.setPlaceholderText("예시  ·  내년 이사비 300만 원")
+        self.profile_fields["planned_expenses"] = expenses
+        form.addRow("예정된 큰 지출", expenses)
+        layout.addLayout(form)
+        layout.addWidget(label("금액은 원화 환산 기준입니다. 확인된 금액만 입력하고 부채가 없다면 0원을 기록하세요. 이전에 저장한 금액의 통화와 실수령 기준을 확인해 주세요. 목표별 투자 시작금과 월 납입금은 목표에서 설정합니다.", "muted", True))
+        layout.addStretch()
+        return body
 
     def page_goals(self,layout):
         self.heading(layout,"원하는 미래를, 확인 가능한 목표로.","결과물·수치·반복 목표를 나누고, 달성 여부를 직접 확인합니다.","GOALS & MILESTONES")
@@ -395,7 +451,7 @@ class MainWindow(QMainWindow):
             card,cl=panel();cl.addWidget(label(insight["title"],"sectionTitle",True));cl.addWidget(label(insight["body"],"muted",True));layout.addWidget(card)
         actions,al=panel();al.addWidget(label("추천을 다음 계획으로 연결하기","sectionTitle"));al.addWidget(label("기존 완료 기록을 남기고, 현재 가용 시간 안에서 미완료 과제의 새 일정을 미리 확인합니다.","muted",True));al.addWidget(button("계획 수정안 보기",lambda:self.plan(True),True),0,Qt.AlignmentFlag.AlignLeft);layout.addWidget(actions)
         external,el=panel();el.addWidget(label("외부 상담과 자료 확인","sectionTitle"));el.addWidget(label("목표·실행 현황을 요약해 복사하거나 브라우저에서 자료를 직접 확인할 수 있습니다. 검색 결과를 검증된 근거로 자동 등록하지 않습니다.","muted",True))
-        self.include_profile=QCheckBox("추가로 프로필·전체 자산 현황 포함 (목표 입력 수치는 기본 포함)");el.addWidget(self.include_profile)
+        self.include_profile=QCheckBox("프로필도 포함 (금융·자산 및 커리어 상세 정보)");el.addWidget(self.include_profile)
         search=QLineEdit();search.setPlaceholderText("직무·시험명 등 확인할 자료 입력")
         el.addLayout(row(button("상담용 요약 복사",self.copy_coaching),search,button("브라우저 검색 ↗",lambda:self.open_search(search.text()))));layout.addWidget(external)
 
@@ -471,6 +527,7 @@ class MainWindow(QMainWindow):
     def save_profile(self):
         def action():
             data={key:(editor.text().strip() if isinstance(editor,QLineEdit) else editor.value()) for key,editor in self.profile_fields.items()}
+            data.update(self.career_profile.values())
             self.store.save_profile(data);self.refresh();self.statusBar().showMessage("프로필을 저장했습니다.",5000)
         self.guard(action)
 
@@ -524,8 +581,10 @@ class MainWindow(QMainWindow):
 
     def copy_coaching(self):
         data={"goals":self.goals,"tasks":self.tasks,"weekly_hours":self.profile["weekly_hours"]}
-        data["goal_analysis"]=[analyze_goal(g,self.profile,self.metrics,self.tasks,self.habits,self.goals) for g in self.goals if g["status"]=="active"]
-        if self.include_profile.isChecked():data["profile"]=self.profile
+        include_profile = self.include_profile.isChecked()
+        report_profile = self.profile if include_profile else {"weekly_hours": self.profile["weekly_hours"]}
+        data["goal_analysis"]=[analyze_goal(g,report_profile,self.metrics,self.tasks,self.habits,self.goals) for g in self.goals if g["status"]=="active"]
+        if include_profile:data["profile"]=self.profile
         prompt="다음은 내가 직접 기록한 목표와 실행 현황이다. 사실·해석·정보 부족을 구분하고, 가용 시간 안에서 실행 가능한 개선안을 제안해줘. 근거 없는 실력 점수·성공 확률·투자수익을 만들지 말아줘.\n\n"+json.dumps(data,ensure_ascii=False,indent=2)
         QApplication.clipboard().setText(prompt);self.statusBar().showMessage("상담용 요약을 복사했습니다. 외부 서비스에 붙여넣을 내용을 확인하세요.",7000)
 

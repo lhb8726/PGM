@@ -16,6 +16,7 @@ CATEGORY_NAMES = {
     "career": "커리어·전문성", "learning": "학습·지식", "health": "건강·체력",
     "life": "경험·라이프스타일", "habits": "자기관리·습관",
 }
+CAREER_PROFILE_FACT_PREFIX = "커리어 프로필 자기 보고 · "
 
 
 def _text(value, limit=500):
@@ -24,6 +25,43 @@ def _text(value, limit=500):
     value = re.sub(r"</?[A-Za-z][^>]*>", "", value)
     value = "".join(ch for ch in value if ch.isprintable() or ch in "\n\t")
     return " ".join(value.split())[:limit]
+
+
+def _career_profile_facts(profile):
+    career = profile.get("career")
+    if not isinstance(career, dict):
+        career = {}
+    facts = []
+    for label, value in (
+        ("현재 역할", profile.get("occupation")),
+        ("경험 요약", profile.get("experience")),
+        ("역량 요약", profile.get("skills")),
+        ("희망 직무", career.get("desired_role")),
+    ):
+        if value := _text(value, 120):
+            facts.append(f"{CAREER_PROFILE_FACT_PREFIX}{label}: {value}")
+
+    for key, label, primary, fields in (
+        ("skills", "기술", "name", ("level", "evidence")),
+        ("employment", "업무 경력", "role", ("start_month", "end_month")),
+        ("certificates", "자격 기록", "name", ("issuer", "issued_on")),
+        ("portfolio", "포트폴리오", "title", ("role",)),
+    ):
+        entries = career.get(key)
+        if not isinstance(entries, list):
+            continue
+        samples = []
+        for row in entries:
+            name = _text(row.get(primary), 80) if isinstance(row, dict) else ""
+            if not name:
+                continue
+            parts = [name] + [_text(row.get(field), 80) for field in fields]
+            samples.append(" · ".join(part for part in parts if part))
+            if len(samples) == 3:
+                break
+        if samples:
+            facts.append(f"{CAREER_PROFILE_FACT_PREFIX}{label} (최대 3건): {' / '.join(samples)}")
+    return facts
 
 
 def _number(value):
@@ -274,6 +312,7 @@ def analyze_growth(goal, profile, metrics, tasks, habits=None, today=None):
     if category == "health":
         warnings.append("이 보고서는 생활·운동 기록의 계획 비교입니다. 의학적 진단·적정 체중·운동 강도·식단을 산출하지 않습니다.")
     if category == "career":
+        facts.extend(_career_profile_facts(profile))
         warnings.append("준비 과제·결과물 충족 여부와 실제 채용·합격·최종 승인은 서로 다른 결과입니다.")
 
     hours = _number(plan.get("estimated_hours"))

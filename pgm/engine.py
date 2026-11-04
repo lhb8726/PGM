@@ -145,21 +145,36 @@ def diagnose(profile: dict, metrics: list[dict], goals: list[dict]) -> list[dict
 
         summary = f"저장된 지표 {len(recorded)}개 · 진행 중 목표 {len(related_goals)}개."
         if category == "finance":
-            financial_keys = ("assets", "liabilities", "monthly_income", "monthly_expenses")
-            known = bool(profile.get("financial_confirmed")) or any(_number(profile.get(k)) != 0 for k in financial_keys)
-            if known:
-                assets, debt, income, expense = [_number(profile.get(k)) for k in financial_keys]
-                summary += f" 사용자 입력 기준 순자산 {assets - debt:,.0f}, 월 수입−지출 {income - expense:,.0f}."
-                evidence_parts.append("프로필 금액의 통화·기준일·증빙을 별도로 확인하세요.")
-                if income > 0:
-                    evidence_parts.append(f"내부 지표 (수입−지출)/수입: {(income-expense)/income*100:.1f}% · 투자수익 미반영")
-                else:
-                    evidence_parts.append("수입이 0이거나 미입력이므로 수입 대비 비율을 계산하지 않았습니다.")
+            assets = profile.get("assets")
+            debt = profile.get("liabilities")
+            income = profile.get("monthly_income")
+            expense = profile.get("monthly_expenses")
+            if assets is not None and debt is not None:
+                summary += f" 순자산 {assets - debt:,.0f}원."
+                evidence_parts.append(f"사용자 입력 자산·부채 · {profile.get('valuation_date') or '기준일 미입력'}")
             else:
-                missing.append("자산·부채·수입·지출의 실제 확인값")
-        elif category == "career" and (profile.get("occupation") or profile.get("skills")):
-            evidence_parts.append(f"사용자 입력: {profile.get('occupation') or '직업 미입력'} · {profile.get('skills') or '역량 미입력'}")
-            summary += " 프로필 서술만으로 숙련도를 확정하지 않습니다."
+                missing.append("총자산과 총부채의 실제 확인값")
+            if income is not None and expense is not None:
+                summary += f" 월 수입−지출 {income - expense:,.0f}원."
+                evidence_parts.append("사용자 입력 월 수입·생활 지출 · 투자수익 미반영")
+                if income > 0:
+                    evidence_parts.append(f"수입 대비 잔액 비율 {(income-expense)/income*100:.1f}%")
+            else:
+                missing.append("월 수입과 월 지출의 실제 확인값")
+            if income == 0:
+                evidence_parts.append("수입을 0원으로 기록해 수입 대비 비율을 계산하지 않았습니다.")
+            if profile.get("planned_expenses"):
+                evidence_parts.append("예정된 큰 지출이 등록되어 있습니다. 월 잔액에는 자동 차감하지 않습니다.")
+        elif category == "career":
+            career = profile.get("career") or {}
+            if career.get("desired_role"):
+                evidence_parts.append("사용자 입력 희망직무 · " + career["desired_role"])
+            if profile.get("occupation"):
+                evidence_parts.append("사용자 입력 현재 역할 · " + profile["occupation"])
+            if career.get("skills"):
+                evidence_parts.append("스킬 " + " · ".join(entry["name"] for entry in career["skills"][:5]))
+            elif profile.get("skills"):
+                evidence_parts.append("사용자 입력 역량·자격 메모 · " + profile["skills"])
         if has_confirmed:
             level = "근거 기록 있음"
         elif evidence_parts:
@@ -454,9 +469,9 @@ def insights(profile: dict, goals: list[dict], tasks: list[dict], metrics: list[
     prepared = [goal for goal in active_goals if goal.get("kind") != "numeric" and _related(goal, tasks) and all(task.get("done") for task in _related(goal, tasks))]
     if prepared:
         result.append({"title": "준비 완료와 최종 달성을 확인하세요", "body": " · ".join(str(goal.get("title", "목표")) for goal in prepared[:3]) + ": 준비 과제가 끝났습니다. 합격·취득·최종 결과물은 별도로 확인하세요.", "kind": "proposal"})
-    income = _number(profile.get("monthly_income"))
-    expense = _number(profile.get("monthly_expenses"))
-    if expense > income:
+    income = profile.get("monthly_income")
+    expense = profile.get("monthly_expenses")
+    if income is not None and expense is not None and expense > income:
         result.append({"title": "입력된 월 현금흐름 확인", "body": f"입력한 수입−지출이 {income-expense:,.0f}입니다. 금액·기준 기간을 확인하고 목표에 쓸 수 있는 예산을 다시 검토하세요. 투자수익은 가정하지 않았습니다.", "kind": "warning"})
     result.append({"title": "이번 주 회고를 다음 행동으로", "body": "잘한 점, 어려웠던 원인, 다음에 바꿀 행동을 하나씩 기록하세요. 아래 제안은 저장된 정보에 따른 규칙 기반 안내입니다.", "kind": "proposal"})
     return result

@@ -83,14 +83,28 @@ class StorageTests(unittest.TestCase):
     def test_legacy_v01_records_and_archive_get_optional_defaults_without_data_loss(self):
         goal_id = self.goal()
         task_id = self.store.save_task({"goal_id": goal_id, "title": "가상 기존 과제"})
+        profile = {
+            "name": "가상 기존 사용자", "age": "25", "occupation": "가상 직무",
+            "experience": "가상 기존 경력", "skills": "가상 기존 역량", "weekly_hours": 10.0,
+            "monthly_budget": 0, "assets": 500000, "liabilities": 0,
+            "monthly_income": 1000000, "monthly_expenses": 0,
+        }
         goal = {k: v for k, v in self.store.goals()[0].items() if k not in {"id", "planning"}}
         task = {k: v for k, v in self.store.tasks()[0].items() if k not in {"id", "done_when", "rationale", "analysis_key", "not_before"}}
         with self.store._conn:
+            self.store._conn.execute("UPDATE profile SET data = ? WHERE id = 1", (json.dumps(profile),))
             self.store._conn.execute("UPDATE goals SET data = ? WHERE id = ?", (json.dumps(goal), goal_id))
             self.store._conn.execute("UPDATE tasks SET data = ? WHERE id = ?", (json.dumps(task), task_id))
         archive = self.store.export_backup(self.root / "legacy-v01.pgmbackup")
         self.store.save_goal({"id": goal_id, "title": "복원 전에만 보이는 가상 수정"})
         self.store.restore_backup(archive)
+        restored_profile = self.store.profile()
+        self.assertEqual(restored_profile["occupation"], profile["occupation"])
+        self.assertEqual(restored_profile["experience"], profile["experience"])
+        self.assertEqual(restored_profile["skills"], profile["skills"])
+        self.assertEqual(restored_profile["assets"], 500000)
+        self.assertIsNone(restored_profile["liabilities"])
+        self.assertEqual(restored_profile["career"], {})
         restored = self.store.goals()[0]
         self.assertEqual(restored["title"], goal["title"])
         self.assertEqual(restored["planning"], normalize_planning())
@@ -99,6 +113,34 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(self.store.tasks()[0]["rationale"], "")
         self.assertEqual(self.store.tasks()[0]["analysis_key"], "")
         self.assertEqual(self.store.tasks()[0]["not_before"], "")
+
+    def test_profile_validation_and_backup_keep_career_records_and_explicit_zero(self):
+        data = {
+            "assets": 800000, "liabilities": 0, "valuation_date": "2026-11-01",
+            "planned_expenses": "가상 교재비", "career": {
+                "desired_role": "가상 웹 개발",
+                "skills": [{"name": "Python"}, {"name": "SQL", "evidence": "가상 학습 프로젝트"}],
+                "portfolio": [{"title": "가상 결과물", "url": "https://example.com/demo"}],
+            },
+        }
+        self.store.save_profile(data)
+        original = self.store.profile()
+        invalid = [
+            {"valuation_date": "2026-02-30"},
+            {"career": {"portfolio": [{"title": "가상", "url": "javascript:alert(1)"}]}},
+            {"career": {"employment": [{"company": "가상", "start_month": "2026-11", "end_month": "2026-10"}]}},
+            {"career": {"skills": [{"level": "가상"}]}},
+        ]
+        for values in invalid:
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                self.store.save_profile(values)
+            self.assertEqual(self.store.profile(), original)
+        archive = self.store.export_backup(self.root / "profile.pgmbackup")
+        self.store.save_profile({"career": {}, "liabilities": None})
+        self.store.restore_backup(archive)
+        self.assertEqual(self.store.profile(), original)
+        self.assertEqual(self.store.profile()["liabilities"], 0)
+        self.assertIsNone(self.store.profile()["monthly_expenses"])
 
     def test_analysis_task_identity_and_start_date_remain_on_partial_update(self):
         goal_id = self.goal()
@@ -214,7 +256,7 @@ class StorageTests(unittest.TestCase):
             self.assertTrue(other.is_demo())
             other.restore_backup(before)
             self.assertFalse(other.is_demo())
-            self.assertEqual(other.profile()["assets"], 0)
+            self.assertIsNone(other.profile()["assets"])
             self.assertEqual(other.profile()["name"], "")
         finally:
             other.close()

@@ -21,6 +21,7 @@ from uuid import uuid4
 import zipfile
 
 from .planning_schema import normalize_planning
+from .profile_schema import FINANCE_AMOUNTS, normalize_career
 
 
 CATEGORIES = {"finance", "career", "learning", "health", "life", "habits"}
@@ -29,9 +30,11 @@ MAX_BACKUP_BYTES = 128 * 1024 * 1024
 MAX_BACKUP_FILES = 2000
 DEFAULT_PROFILE = {
     "name": "", "age": "", "occupation": "", "experience": "", "skills": "",
-    "weekly_hours": 10.0, "monthly_budget": 0, "assets": 0, "liabilities": 0,
-    "monthly_income": 0, "monthly_expenses": 0,
+    "weekly_hours": 10.0, "monthly_budget": 0,
+    **dict.fromkeys(FINANCE_AMOUNTS),
+    "valuation_date": "", "planned_expenses": "", "career": {},
 }
+LEGACY_PROFILE_KEYS = DEFAULT_PROFILE.keys() - {"valuation_date", "planned_expenses", "career"}
 SCHEMA = {
     "meta": "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
     "profile": "CREATE TABLE profile (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL)",
@@ -121,8 +124,13 @@ def _profile(data: dict) -> dict:
     age = data.get("age", "")
     result["age"] = "" if age == "" else str(_integer(age, "나이", 0, 150))
     result["weekly_hours"] = _number(data.get("weekly_hours", 10), "주간 가용 시간", 0, 168)
-    for key in ("monthly_budget", "assets", "liabilities", "monthly_income", "monthly_expenses"):
-        result[key] = _integer(data.get(key, 0), key)
+    result["monthly_budget"] = _integer(data.get("monthly_budget", 0), "월 목표용 가용 예산")
+    for key, title in FINANCE_AMOUNTS.items():
+        value = data.get(key)
+        result[key] = None if value is None else _integer(value, title)
+    result["valuation_date"] = _date(data.get("valuation_date", ""), "자산·부채 기준일", optional=True)
+    result["planned_expenses"] = _text(data.get("planned_expenses", ""), "예정된 큰 지출")
+    result["career"] = normalize_career(data.get("career", {}))
     return result
 
 
@@ -248,7 +256,13 @@ class Store:
         self._conn.close()
 
     def profile(self) -> dict:
-        return json.loads(self._conn.execute("SELECT data FROM profile WHERE id = 1").fetchone()[0])
+        value = json.loads(self._conn.execute("SELECT data FROM profile WHERE id = 1").fetchone()[0])
+        if value.keys() == LEGACY_PROFILE_KEYS:
+            # Earlier profiles used zero for both blank inputs and actual zeros.
+            for key in FINANCE_AMOUNTS:
+                if value[key] == 0:
+                    value[key] = None
+        return _profile(value)
 
     def is_demo(self) -> bool:
         """Return dataset provenance saved in the DB and carried by backups."""
@@ -493,7 +507,12 @@ class Store:
                 if len(profiles) != 1 or profiles[0]["id"] != 1:
                     raise ValueError("백업 프로필이 올바르지 않습니다.")
                 value = json.loads(profiles[0]["data"])
-                if not isinstance(value, dict) or _profile(value) != value or set(value) != set(DEFAULT_PROFILE):
+                if not isinstance(value, dict):
+                    raise ValueError("백업 프로필 값이 올바르지 않습니다.")
+                normalized = _profile(value)
+                if value.keys() == LEGACY_PROFILE_KEYS and all(value[key] is not None for key in FINANCE_AMOUNTS):
+                    normalized = {key: normalized[key] for key in LEGACY_PROFILE_KEYS}
+                if normalized != value:
                     raise ValueError("백업 프로필 값이 올바르지 않습니다.")
                 goal_ids = {row[0] for row in connection.execute("SELECT id FROM goals")}
                 validators = {"goals": _goal, "tasks": lambda value: _task(value, goal_ids),

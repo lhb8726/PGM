@@ -2,7 +2,7 @@
 from datetime import date, timedelta
 import unittest
 
-from pgm.growth_analysis import analyze_growth
+from pgm.growth_analysis import CAREER_PROFILE_FACT_PREFIX, analyze_growth
 
 
 TODAY = date(2028, 4, 12)
@@ -122,6 +122,34 @@ class GrowthAnalysisTests(unittest.TestCase):
         report = self.report(g,metrics=[metric])
         self.assertTrue(any("문서·결과물로 분류" in f for f in report["facts"]))
         self.assertTrue(any("진위" in s for s in report["assumptions"]))
+
+    def test_career_profile_is_bounded_self_report_and_keeps_goal_evidence_separate(self):
+        career_profile = profile(
+            experience="가상 업무 경험",
+            career={
+                "desired_role": "<b>가상 직무</b>",
+                "skills": [{"name": f"가상 기술 {i}", "level": "기초", "evidence": "실습 기록"} for i in range(4)],
+                "employment": [{"company": "비공개 업체명", "role": "가상 과거 역할", "start_month": "2027-01"}],
+                "certificates": [{"name": "가상 자격", "issuer": "가상 발급처", "issued_on": "2027-03-02"}],
+                "portfolio": [{"title": "가상 프로젝트", "role": "가상 제작", "url": "https://example.org/private"}],
+                "preferences": {"details": "비공개 선호"},
+                "military": {"details": "비공개 병역"},
+                "introduction": "비공개 소개",
+            },
+        )
+        g = goal()
+        g["planning"]["evidence"] = ""
+        report = self.report(g, p=career_profile)
+        context = "\n".join(fact for fact in report["facts"] if fact.startswith(CAREER_PROFILE_FACT_PREFIX))
+        for expected in ("가상 직업", "가상 업무 경험", "가상 직무", "가상 기술 0 · 기초 · 실습 기록",
+                         "가상 과거 역할 · 2027-01", "가상 자격 · 가상 발급처", "가상 프로젝트 · 가상 제작"):
+            self.assertIn(expected, context)
+        for excluded in ("<b>", "비공개", "example.org/private", "가상 기술 3"):
+            self.assertNotIn(excluded, context)
+        self.assertIn("사용자 입력 완료 기준: 가상 결과물과 검토 기록 완성", report["facts"])
+        self.assertIn("현재 수준을 확인할 결과물·측정값·수행 기록", report["missing"])
+        learning_report = self.report(goal("learning"), p=career_profile)
+        self.assertFalse(any(fact.startswith(CAREER_PROFILE_FACT_PREFIX) for fact in learning_report["facts"]))
 
     def test_monthly_cost_over_budget_is_flagged(self):
         g = goal("life");g["planning"]["monthly_cost"] = 400000

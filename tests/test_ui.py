@@ -14,6 +14,7 @@ from PySide6.QtCore import QDate
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QLabel, QMessageBox
 
 from pgm.app import MainWindow
+from pgm.career_profile import _CareerEntryDialog
 from pgm.constants import CATEGORIES, NAVIGATION
 from pgm.dialogs import GoalDialog, HabitDialog, MetricDialog, ReviewDialog, TaskDialog
 from pgm.storage import Store
@@ -77,14 +78,56 @@ class DesktopIntegrationTests(unittest.TestCase):
     def test_profile_edit_saves_to_sqlite_and_reloads_fields(self):
         self.window.navigate("profile")
         self.window.profile_fields["name"].setText("가상 통합 테스트")
-        self.window.profile_fields["occupation"].setText("가상 프로젝트 개발자")
         self.window.profile_fields["weekly_hours"].setValue(9.5)
+        self.window.profile_tabs.setCurrentIndex(1)
+        debt = self.window.profile_fields["liabilities"]
+        debt.editor.setValue(0)
+        self.window.profile_fields["monthly_expenses"].known.setChecked(False)
+        self.window.profile_fields["valuation_date"].setText("2026-11-03")
+        self.window.profile_tabs.setCurrentIndex(2)
+        career = self.window.career_profile
+        career.occupation.setText("가상 프로젝트 개발자")
+        career.desired_role.setText("가상 데이터 개발")
+        career.introduction.setPlainText("가상 자기소개")
+
+        def record_skill(dialog):
+            dialog.fields["name"].setText("가상 Python")
+            dialog.fields["level"].setText("프로젝트 활용")
+            dialog.accept()
+            return dialog.result()
+
+        with patch.object(_CareerEntryDialog, "exec", record_skill):
+            career.add_button.click()
+        self.assertEqual(career.entries.count(), 1)
+        career.section_selector.setCurrentIndex(career.section_selector.findData("certificates"))
+        self.assertEqual(career.entries.count(), 0)
         self.window.save_profile()
         self.app.processEvents()
-        self.assertEqual(self.store.profile()["name"], "가상 통합 테스트")
-        self.assertEqual(self.store.profile()["weekly_hours"], 9.5)
-        self.assertEqual(self.window.profile_fields["occupation"].text(), "가상 프로젝트 개발자")
+        saved = self.store.profile()
+        self.assertEqual(saved["name"], "가상 통합 테스트")
+        self.assertEqual(saved["weekly_hours"], 9.5)
+        self.assertEqual(saved["liabilities"], 0)
+        self.assertIsNone(saved["monthly_expenses"])
+        self.assertEqual(saved["valuation_date"], "2026-11-03")
+        self.assertEqual(saved["career"]["skills"], [{"name": "가상 Python", "level": "프로젝트 활용"}])
+        self.assertEqual(saved["career"]["introduction"], "가상 자기소개")
+        self.assertEqual(self.window.profile_tabs.currentIndex(), 2)
+        self.assertEqual(self.window.career_profile.occupation.text(), "가상 프로젝트 개발자")
+        self.assertEqual(self.window.career_profile.desired_role.text(), "가상 데이터 개발")
         self.assert_no_guard_error()
+
+    def test_coaching_summary_requires_opt_in_for_profile_context(self):
+        self.store.save_profile({"career": {"desired_role": "가상프로필희망직무", "introduction": "가상프로필자기소개"}})
+        self.window.navigate("coach")
+        self.window.copy_coaching()
+        text = self.app.clipboard().text()
+        self.assertNotIn("가상프로필희망직무", text)
+        self.assertNotIn("가상프로필자기소개", text)
+        self.window.include_profile.setChecked(True)
+        self.window.copy_coaching()
+        text = self.app.clipboard().text()
+        self.assertIn("가상프로필희망직무", text)
+        self.assertIn("가상프로필자기소개", text)
 
     def test_delete_actions_require_confirmation_and_remove_linked_records(self):
         goal = self.store.goals()[0]
