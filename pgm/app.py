@@ -443,39 +443,29 @@ class MainWindow(QMainWindow):
         layout.addStretch()
         return card
 
-    def profile_cards_tab(self, left, right, extra=None):
+    def profile_cards_tab(self, left, right=None, extra=None):
         body = QWidget()
         layout = QVBoxLayout(body)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(14)
-        first, second = QVBoxLayout(), QVBoxLayout()
-        first.addWidget(left)
-        second.addWidget(right)
-        layout.addWidget(ResponsiveColumns(first, second, spacing=14, stretch=(1, 1)))
+        if right is None:
+            layout.addWidget(left)
+        else:
+            first, second = QVBoxLayout(), QVBoxLayout()
+            first.addWidget(left)
+            second.addWidget(right)
+            layout.addWidget(ResponsiveColumns(first, second, spacing=14, stretch=(1, 1)))
         if extra is not None:
             layout.addWidget(extra)
         layout.addStretch()
         return body
 
     def profile_common_tab(self):
-        hours = QDoubleSpinBox()
-        hours.setRange(0, 168)
-        hours.setDecimals(1)
-        hours.setValue(self.profile["weekly_hours"])
-        budget = QDoubleSpinBox()
-        budget.setRange(0, 10**16)
-        budget.setDecimals(0)
-        budget.setGroupSeparatorShown(True)
-        budget.setValue(self.profile["monthly_budget"])
         identity = self.profile_card("기본 정보", (
             ("name", "이름·닉네임", QLineEdit(self.profile["name"])),
             ("age", "나이 (선택)", QLineEdit(self.profile["age"])),
         ))
-        resources = self.profile_card("목표에 쓸 시간과 예산", (
-            ("weekly_hours", "주당 순가용 시간 (시간)", hours),
-            ("monthly_budget", "월 목표용 가용 예산 (원)", budget),
-        ), "고정 일정과 휴식을 제외한 시간을 입력하세요. 계획기는 이 시간을 7일에 균등 배분합니다.")
-        return self.profile_cards_tab(identity, resources)
+        return self.profile_cards_tab(identity)
 
     def profile_finance_tab(self):
         amounts = {
@@ -751,6 +741,29 @@ class MainWindow(QMainWindow):
         left.addWidget(appearance)
         right.addWidget(backups)
         layout.addWidget(ResponsiveColumns(left, right, stretch=(1, 1)))
+        resources, resource_content = panel()
+        resources.setObjectName("settingsSection")
+        resource_content.addWidget(label("계획 기본값", "sectionTitle"))
+        resource_content.addWidget(label("여러 목표와 습관이 공유하는 전체 시간·예산입니다. 목표별 시간과 비용은 각 목표의 분석 조건에서 입력하세요.", "muted", True))
+        hours = QDoubleSpinBox()
+        hours.setRange(0, 168)
+        hours.setDecimals(1)
+        hours.setValue(self.profile["weekly_hours"])
+        budget = QDoubleSpinBox()
+        budget.setRange(0, 10**16)
+        budget.setDecimals(0)
+        budget.setGroupSeparatorShown(True)
+        budget.setValue(self.profile["monthly_budget"])
+        self.planning_fields = {"weekly_hours": hours, "monthly_budget": budget}
+        for caption, editor in (("주당 순가용 시간 (시간)", hours), ("월 목표용 가용 예산 (원)", budget)):
+            caption_label = label(caption, "fieldLabel", True)
+            caption_label.setBuddy(editor)
+            editor.setAccessibleName(caption)
+            resource_content.addWidget(caption_label)
+            resource_content.addWidget(editor)
+        resource_content.addWidget(label("고정 일정과 휴식을 제외한 시간을 입력하세요. 계획기는 이 시간을 7일에 균등 배분합니다.", "muted", True))
+        resource_content.addWidget(button("계획 기본값 저장", self.save_planning_settings, True), 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(resources)
         storage, storage_content = panel()
         storage_content.addWidget(label("내 데이터 보관 위치", "sectionTitle"))
         storage_content.addWidget(label(str(self.store.data_dir), "muted", True))
@@ -822,6 +835,13 @@ class MainWindow(QMainWindow):
             data={key:(editor.text().strip() if isinstance(editor,QLineEdit) else editor.value()) for key,editor in self.profile_fields.items()}
             data.update(self.career_profile.values())
             self.store.save_profile(data);self.refresh();self.statusBar().showMessage("프로필을 저장했습니다.",5000)
+        self.guard(action)
+
+    def save_planning_settings(self):
+        def action():
+            self.store.save_profile({key: editor.value() for key, editor in self.planning_fields.items()})
+            self.refresh()
+            self.statusBar().showMessage("계획 기본값을 저장했습니다.", 5000)
         self.guard(action)
 
     def toggle_task(self,task_id,done):

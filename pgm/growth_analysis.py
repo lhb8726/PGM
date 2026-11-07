@@ -329,7 +329,7 @@ def analyze_growth(goal, profile, metrics, tasks, habits=None, today=None):
     else:
         facts.append(f"사용자 배정 시간 주 {_fmt(weekly)}시간")
     if shared is not None and shared >= 0:
-        facts.append(f"프로필의 전체 목표용 주간 순가용 시간 {_fmt(shared)}시간 · 다른 목표와 공유")
+        facts.append(f"설정의 전체 목표용 주간 순가용 시간 {_fmt(shared)}시간 · 다른 목표와 공유")
         if weekly is not None and weekly > shared:
             warnings.append(f"이 목표의 주간 배정 {_fmt(weekly)}시간이 전체 가용 {_fmt(shared)}시간을 초과합니다.")
             risky = True

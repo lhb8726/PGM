@@ -224,7 +224,7 @@ def _calendar(profile: dict, tasks: list[dict], habits: list[dict] | None,
         free[day] = max(0, capacity - reserved_minutes)
     warnings = []
     if capacity == 0:
-        warnings.append("배치할 가용 시간이 없습니다. 프로필의 주당 순가용 시간을 확인하세요.")
+        warnings.append("배치할 가용 시간이 없습니다. 설정의 계획 기본값에서 주당 순가용 시간을 확인하세요.")
     if overfull:
         warnings.append(f"기존 과제·습관이 {overfull}일에서 일일 가용 시간을 초과합니다. 기존 계획을 조정하세요.")
     return free, capacity, warnings

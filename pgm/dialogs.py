@@ -297,7 +297,7 @@ class GoalDialog(_FormDialog):
         allocation.addRow("남은 작업 예상 총시간 (시간)", self.estimated_hours_input)
         allocation.addRow("이 목표에 배정할 주당 시간", self.weekly_hours_input)
         allocation.addRow("이 목표의 월 예상 비용 (원)", self.monthly_cost_input)
-        guidance = QLabel("모르는 수치는 ‘입력’을 해제해 두세요. 확인한 0과 정보 부족을 구분합니다. 남은 작업 시간에는 이미 완료한 시간을 다시 포함하지 않습니다. 주당 시간은 프로필의 전체 가용 시간 중 이 목표에 배정할 몫입니다.")
+        guidance = QLabel("모르는 수치는 ‘입력’을 해제해 두세요. 확인한 0과 정보 부족을 구분합니다. 남은 작업 시간에는 이미 완료한 시간을 다시 포함하지 않습니다. 주당 시간은 설정의 전체 가용 시간 중 이 목표에 배정할 몫입니다.")
         guidance.setWordWrap(True)
         guidance.setObjectName("muted")
         allocation.addRow(guidance)

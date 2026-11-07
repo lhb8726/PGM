@@ -128,13 +128,19 @@ class DesktopIntegrationTests(unittest.TestCase):
             dialog.deleteLater()
 
     def test_profile_edit_saves_to_sqlite_and_reloads_fields(self):
+        self.window.navigate("settings")
+        self.window.planning_fields["weekly_hours"].setValue(9.5)
+        self.window.planning_fields["monthly_budget"].setValue(150000)
+        self.window.save_planning_settings()
+        self.assertEqual(self.window.planning_fields["weekly_hours"].value(), 9.5)
         self.window.navigate("profile")
         self.app.processEvents()
         tabs = self.window.profile_tabs
         tab_top = tabs.y()
         common_height = tabs.height()
         self.window.profile_fields["name"].setText("가상 통합 테스트")
-        self.window.profile_fields["weekly_hours"].setValue(9.5)
+        self.assertNotIn("weekly_hours", self.window.profile_fields)
+        self.assertNotIn("monthly_budget", self.window.profile_fields)
         self.window.profile_tabs.setCurrentIndex(1)
         debt = self.window.profile_fields["liabilities"]
         debt.editor.setValue(0)
@@ -167,6 +173,7 @@ class DesktopIntegrationTests(unittest.TestCase):
         saved = self.store.profile()
         self.assertEqual(saved["name"], "가상 통합 테스트")
         self.assertEqual(saved["weekly_hours"], 9.5)
+        self.assertEqual(saved["monthly_budget"], 150000)
         self.assertEqual(saved["liabilities"], 0)
         self.assertIsNone(saved["monthly_expenses"])
         self.assertEqual(saved["valuation_date"], "2026-11-03")

@@ -27,7 +27,7 @@ def analyze_goal(goal, profile, metrics=None, tasks=None, habits=None, all_goals
     costs = sum(float(g.get("planning", {}).get("monthly_cost") or 0) for g in active)
     budget = float(profile.get("monthly_budget") or 0)
     if costs > budget:
-        report["warnings"].append(f"선언한 목표 비용 합계 {costs:,.0f}원/월이 프로필의 목표용 예산 {budget:,.0f}원/월을 초과합니다. 기본값·미입력 여부와 비용 배분을 확인하세요.")
+        report["warnings"].append(f"선언한 목표 비용 합계 {costs:,.0f}원/월이 설정의 월 목표용 예산 {budget:,.0f}원/월을 초과합니다. 기본값·미입력 여부와 비용 배분을 확인하세요.")
     report["assumptions"].append("단계와 과제는 입력 정보에 따른 규칙 기반 제안입니다. 실행 과제의 예상 분량은 수정 가능한 초기 추정이며 목표 전체의 달성을 보장하지 않습니다.")
     if report.get("finance", {}).get("milestones"):
         report["assumptions"].append("시점별 세후 금액은 각 시점에 독립적으로 전량 청산하는 비교입니다. 매번 매도·납부한 뒤 재투자하는 경로나 기본공제를 누적 적용한 경로가 아닙니다.")
