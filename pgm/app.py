@@ -10,7 +10,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
-from PySide6.QtCore import QDate, QSettings, QStandardPaths, Qt, QTimer, QUrl
+from PySide6.QtCore import QDate, QSize, QSettings, QStandardPaths, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDateEdit, QDialog, QDoubleSpinBox,
@@ -29,8 +29,9 @@ from .constants import CATEGORIES, HORIZONS, KINDS, NAVIGATION, PRIORITIES
 from .dialogs import GoalDialog, HabitDialog, MetricDialog, OptionalNumber, ReviewDialog, TaskDialog, _fit_to_screen, goal_selector
 from .profile_schema import FINANCE_AMOUNTS
 from .storage import Store
-from .theme import apply_theme
-from .widgets import ActivityChart, CheckBoxLabel, ResponsiveColumns, Ring, label, panel, pill, stat_card
+from .theme import apply_theme, theme_colors
+from .visuals import CategoryChart, TrendChart, ui_icon
+from .widgets import CheckBoxLabel, ResponsiveColumns, Ring, label, panel, pill, refresh_accents, stat_card
 
 
 def button(text, callback, primary=False, ghost=False):
@@ -115,39 +116,73 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(QIcon(str(Path(__file__).parent/"assets"/"icon.svg")))
         self.setMinimumSize(960,600)
         self.resize(1440,960)
-        apply_theme(QApplication.instance(),self.preferences.value("light",False,type=bool))
+        apply_theme(QApplication.instance(),self.preferences.value("light",True,type=bool))
         root=QWidget();root.setObjectName("appRoot");self.setCentralWidget(root)
         shell=QHBoxLayout(root);shell.setContentsMargins(0,0,0,0);shell.setSpacing(0)
-        sidebar=QWidget();sidebar.setObjectName("sidebar")
-        side=QVBoxLayout(sidebar);side.setContentsMargins(19,17,18,10);side.setSpacing(3)
-        brand=row(label("◈","brand"),label("PGM","brand"),None)
-        side.addLayout(brand);side.addWidget(label("GROWTH WORKSPACE","eyebrow"));side.addSpacing(17)
-        side.addWidget(label("나의 성장 공간","muted"));side.addSpacing(6)
-        self.nav={}
-        for key,icon,title in NAVIGATION:
-            b=button(f"{icon}    {title}",lambda k=key:self.navigate(k))
-            b.setObjectName("nav");b.setCheckable(True);side.addWidget(b);self.nav[key]=b
-        side.addSpacing(14);side.addWidget(label("SIX AREAS OF GROWTH","eyebrow"));side.addSpacing(4)
-        for key,c in CATEGORIES.items():
-            item=label(f"●   {c['name']}");item.setStyleSheet(f"color:{c['color']}; padding:3px 11px; font-size:11px;")
+        sidebar = QWidget()
+        sidebar.setObjectName("sidebar")
+        side = QVBoxLayout(sidebar)
+        side.setContentsMargins(16, 24, 16, 16)
+        side.setSpacing(5)
+        mark = label("P", "brandMark")
+        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mark.setFixedSize(36, 36)
+        brand_copy = QVBoxLayout()
+        brand_copy.setSpacing(1)
+        brand_copy.addWidget(label("PGM", "brand"))
+        brand_copy.addWidget(label("PERSONAL GROWTH", "eyebrow"))
+        side.addLayout(row(mark, brand_copy, None))
+        side.addSpacing(24)
+        side.addWidget(label("WORKSPACE", "eyebrow"))
+        self.nav = {}
+        for key, _icon, title in NAVIGATION:
+            item = button(title, lambda k=key: self.navigate(k))
+            item.setObjectName("nav")
+            item.setCheckable(True)
+            item.setIcon(ui_icon(key, theme_colors()["muted"]))
+            item.setIconSize(QSize(19, 19))
+            side.addWidget(item)
+            self.nav[key] = item
+        side.addSpacing(22)
+        side.addWidget(label("성장 분야", "eyebrow"))
+        for key, category in CATEGORIES.items():
+            item = button(category["name"], lambda k=key: self.select_category(k), ghost=True)
+            item.setObjectName("categoryLink")
+            item.setAccessibleName(category["name"] + " 목표 보기")
             side.addWidget(item)
         side.addStretch()
-        box,bl=panel();bl.setContentsMargins(12,12,12,12)
-        bl.addWidget(label("내 PC에 저장되는 성장 기록",wrap=True))
-        bl.addWidget(label(f"v{__version__} · 데스크톱 프로토타입","muted"))
+        box, footer = panel()
+        footer.setContentsMargins(12, 12, 12, 12)
+        footer.addWidget(label("나만의 성장 기록", "summaryTitle"))
+        footer.addWidget(label("이 PC에 보관되는 기록", "muted", True))
+        footer.addWidget(label(f"PGM  {__version__}", "muted"))
         side.addWidget(box)
-        sidebar_scroll=QScrollArea();sidebar_scroll.setFixedWidth(230);sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll = QScrollArea()
+        sidebar_scroll.setFixedWidth(218)
+        sidebar_scroll.setWidgetResizable(True)
         sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        sidebar_scroll.setWidget(sidebar);shell.addWidget(sidebar_scroll)
-        right=QWidget();right_layout=QVBoxLayout(right);right_layout.setContentsMargins(0,0,0,0);right_layout.setSpacing(0)
-        top=QWidget();top.setObjectName("topbar");top.setFixedHeight(75)
-        tl=QHBoxLayout(top);tl.setContentsMargins(30,0,30,0)
-        self.breadcrumb=label("WORKSPACE   /   대시보드","muted");tl.addWidget(self.breadcrumb);tl.addStretch()
-        self.category_combo=QComboBox();self.category_combo.addItem("모든 분야","all")
-        for key,c in CATEGORIES.items():self.category_combo.addItem(c["name"],key)
-        self.category_combo.setMinimumWidth(160)
+        sidebar_scroll.setWidget(sidebar)
+        shell.addWidget(sidebar_scroll)
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+        top = QWidget()
+        top.setObjectName("topbar")
+        top.setFixedHeight(70)
+        top_layout = QHBoxLayout(top)
+        top_layout.setContentsMargins(28, 0, 28, 0)
+        self.breadcrumb = label("나의 성장 공간  /  대시보드", "muted")
+        top_layout.addWidget(self.breadcrumb)
+        top_layout.addStretch()
+        self.category_combo = QComboBox()
+        self.category_combo.addItem("모든 분야", "all")
+        for key, category in CATEGORIES.items():
+            self.category_combo.addItem(category["name"], key)
+        self.category_combo.setMinimumWidth(150)
         self.category_combo.currentIndexChanged.connect(self.change_category)
-        tl.addWidget(self.category_combo);tl.addWidget(button("＋ 목표 추가",self.edit_goal,True))
+        top_layout.addWidget(self.category_combo)
+        top_layout.addWidget(button("＋ 목표 추가", self.edit_goal, True))
         right_layout.addWidget(top)
         self.scroll=QScrollArea();self.scroll.setWidgetResizable(True);right_layout.addWidget(self.scroll,1)
         shell.addWidget(right,1)
@@ -174,13 +209,15 @@ class MainWindow(QMainWindow):
     def refresh(self):
         self.snapshot()
         title=next(x[2] for x in NAVIGATION if x[0]==self.page_key)
-        self.breadcrumb.setText(f"WORKSPACE   /   {title}")
-        for key,b in self.nav.items():b.setChecked(key==self.page_key)
+        self.breadcrumb.setText(f"나의 성장 공간  /  {title}")
+        for key, item in self.nav.items():
+            item.setChecked(key == self.page_key)
+            color = theme_colors()["accent"] if key == self.page_key else theme_colors()["muted"]
+            item.setIcon(ui_icon(key, color))
         page=QWidget();page.setObjectName("page")
         layout=QVBoxLayout(page);layout.setContentsMargins(32,27,32,30);layout.setSpacing(22)
         if self.demo:
-            hint=label("DEMO   ·   현재 표시된 이름·금액·성과는 모두 가상 예시입니다.")
-            hint.setStyleSheet("color:#e5bd67; background:rgba(229,189,103,18); padding:9px 13px; border-radius:7px; font-size:11px;")
+            hint=label("DEMO · 가상 예시로 둘러보는 중입니다. 이름·금액·성과는 모두 예시입니다.", "demoNotice", True)
             layout.addWidget(hint)
         getattr(self,f"page_{self.page_key}")(layout)
         layout.addStretch()
@@ -189,10 +226,33 @@ class MainWindow(QMainWindow):
         if old is not None:old.deleteLater()
         self.statusBar().showMessage(f"로컬 저장 · 목표 {len(self.goals)}개 · 기록은 내 PC에 보관됩니다"+(" · 가상 예시" if self.demo else ""))
 
-    def heading(self,layout,title,subtitle,eyebrow=None):
-        box=QVBoxLayout();box.setSpacing(7)
-        if eyebrow:box.addWidget(label(eyebrow,"eyebrow"))
-        box.addWidget(label(title,"pageTitle",True));box.addWidget(label(subtitle,"muted",True));layout.addLayout(box)
+    def select_category(self, category):
+        self.category_combo.setCurrentIndex(self.category_combo.findData(category))
+        if self.page_key in {"profile", "settings"}:
+            self.navigate("goals")
+
+    def heading(self, layout, title, subtitle, eyebrow=None, action=None):
+        copy = QVBoxLayout()
+        copy.setSpacing(7)
+        if eyebrow:
+            copy.addWidget(label(eyebrow, "eyebrow"))
+        copy.addWidget(label(title, "pageTitle", True))
+        copy.addWidget(label(subtitle, "muted", True))
+        header = QHBoxLayout()
+        header.addLayout(copy, 1)
+        if action is not None:
+            action.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+            header.addWidget(action, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(header)
+
+    def stat_row(self, layout, cards):
+        first, second = QHBoxLayout(), QHBoxLayout()
+        midpoint = (len(cards) + 1) // 2
+        for group, entries in ((first, cards[:midpoint]), (second, cards[midpoint:])):
+            group.setSpacing(14)
+            for card in entries:
+                group.addWidget(card, 1)
+        layout.addWidget(ResponsiveColumns(first, second, spacing=14, stretch=(1, 1)))
 
     def section(self,layout,title,action=None):
         r=row(label(title,"sectionTitle"),None)
@@ -211,23 +271,41 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self,"작업을 완료하지 못했습니다",str(exc))
             return None
 
-    def goal_card(self,g):
-        c=CATEGORIES[g["category"]];state=engine.progress_state(g,self.tasks);p=state["value"]
-        w,l=panel();w.setMinimumWidth(300)
-        l.addLayout(row(pill(c["name"],c["color"]),pill(HORIZONS.get(g["horizon"],"목표")),None,label("✓ 달성 확인" if g["status"]=="completed" else PRIORITIES.get(g["priority"],"보통"),"muted")))
-        title=label(g["title"],"sectionTitle",True);l.addWidget(title)
-        if g["kind"]=="numeric":detail=f"{number(g['current'])} / {number(g['target'])} {g['unit']}"
-        else:detail=g.get("criteria","")
-        if g["category"]=="finance" and (g.get("planning") or {}).get("target_basis")=="after_tax_cash":detail="현재 평가액 / 세후 목표  ·  "+detail
-        l.addWidget(label(detail,"muted",True));l.addWidget(progress_bar(p or 0,c["color"]))
-        progress_label=state["label"] if p is None else f"{p:.0%} · {state['label']}"
-        text=label(progress_label,"muted");text.setToolTip(state["detail"])
-        l.addLayout(row(text,None,label(date_text(g["due_date"]),"muted")))
-        pending=[t for t in self.tasks if t["goal_id"]==g["id"] and not t["done"]]
-        next_task=min(pending,key=lambda t:(t.get("scheduled_date") or "9999",t.get("position",0)),default=None)
-        l.addWidget(label("다음  ·  "+(next_task["title"] if next_task else "다음 단계를 계획해 보세요"),wrap=True))
-        l.addLayout(row(button("상세 분석",lambda:self.show_goal_analysis(g),ghost=True),button("목표 수정",lambda:self.edit_goal(g),ghost=True),None,button("로드맵",lambda:self.open_roadmap(g),ghost=True)))
-        return w
+    def goal_card(self, goal):
+        category = CATEGORIES[goal["category"]]
+        state = engine.progress_state(goal, self.tasks)
+        progress = state["value"]
+        card, content = panel()
+        card.setObjectName("goalCard")
+        card.setMinimumWidth(286)
+        content.addLayout(row(
+            pill(category["name"], category["color"]),
+            None,
+            label("달성 완료" if goal["status"] == "completed" else HORIZONS[goal["horizon"]], "muted"),
+        ))
+        content.addWidget(label(goal["title"], "sectionTitle", True))
+        content.addWidget(label(goal.get("criteria") or "완료 기준을 추가해 주세요.", "muted", True))
+        if goal["kind"] == "numeric":
+            amount = f"{number(goal['current'])} / {number(goal['target'])} {goal['unit']}"
+            if goal["category"] == "finance" and (goal.get("planning") or {}).get("target_basis") == "after_tax_cash":
+                amount = "현재 평가액 / 세후 목표  ·  " + amount
+            content.addWidget(label(amount, "summaryTitle", True))
+        value = "정보 부족" if progress is None else f"{progress:.0%}"
+        progress_text = label(value, "metricValue")
+        progress_text.setToolTip(state["detail"])
+        content.addLayout(row(label(state["label"], "muted", True), None, progress_text))
+        content.addWidget(progress_bar(progress or 0, category["color"]))
+        pending = [task for task in self.tasks if task["goal_id"] == goal["id"] and not task["done"]]
+        next_task = min(pending, key=lambda task: (task.get("scheduled_date") or "9999", task.get("position", 0)), default=None)
+        content.addWidget(label("다음 실행  ·  " + (next_task["title"] if next_task else "목표의 다음 단계를 정해 보세요."), "muted", True))
+        content.addLayout(row(pill(PRIORITIES[goal["priority"]]), None, label(date_text(goal["due_date"]), "muted")))
+        content.addLayout(row(
+            button("상세 분석", lambda: self.show_goal_analysis(goal)),
+            button("수정", lambda: self.edit_goal(goal), ghost=True),
+            None,
+            button("로드맵 →", lambda: self.open_roadmap(goal), ghost=True),
+        ))
+        return card
 
     def goal_grid(self,layout,goals):
         grid=QGridLayout();grid.setSpacing(15)
@@ -236,14 +314,14 @@ class MainWindow(QMainWindow):
 
     def task_row(self,t):
         g=next((g for g in self.goals if g["id"]==t["goal_id"]),None)
-        w,l=panel();l.setContentsMargins(15,12,15,12)
+        w,l=panel();w.setObjectName("taskCard");l.setContentsMargins(16,14,16,14)
         h=QHBoxLayout();check=QCheckBox();check.setChecked(t["done"])
         check.setAccessibleName(f"{t['title']} 완료")
         check.toggled.connect(lambda done,i=t["id"]:self.toggle_task(i,done))
         h.addWidget(check)
         text=QVBoxLayout();text.setSpacing(5)
         title=label(t["title"],wrap=True)
-        if t["done"]:title.setStyleSheet("color:#82938e;")
+        if t["done"]:title.setObjectName("muted")
         text.addWidget(title)
         detail=f"{g['title'] if g else '연결 목표 없음'}  ·  {date_text(t.get('scheduled_date',''))}"
         if t["done"]:detail+=f" · 실제 {t['actual_minutes']}분" if t["actual_minutes"] else " · 실제 시간 미기록"
@@ -254,62 +332,60 @@ class MainWindow(QMainWindow):
         h.addWidget(button("수정",lambda:self.edit_task(t),ghost=True));l.addLayout(h)
         return w
 
-    def page_dashboard(self,layout):
-        name=self.profile.get("name") or "당신"
-        self.heading(layout,f"{name}의 다음 단계, 분명하게.","작은 실행을 쌓고, 실제 변화로 다음 경로를 조정하세요.",date.today().strftime("GROWTH OVERVIEW   /   %Y.%m.%d"))
-        goals=self.filtered_goals();ids={g["id"] for g in goals}
-        tasks=[t for t in self.tasks if t["goal_id"] in ids]
-        active=[g for g in goals if g["status"]!="completed"]
-        today=[t for t in tasks if t.get("scheduled_date")==date.today().isoformat()]
-        done=sum(t["done"] for t in today)
-        thisweek=[t for t in self.tasks if t.get("scheduled_date") and date.today()<=date.fromisoformat(t["scheduled_date"])<=date.today()+timedelta(days=6)]
-        minutes=sum(t["minutes"] for t in thisweek)
-        current_day = date.today()
-        week_start = current_day - timedelta(days=6)
-        habit_completions = sum(
-            week_start <= date.fromisoformat(day) <= current_day
-            for habit in self.habits for day in habit["completions"]
-        )
-        stats = [
-            stat_card("진행 중인 목표", str(len(active)), "각자의 속도로, 같은 방향으로", "#b69af7", "↗"),
-            stat_card("오늘의 실행", f"{done} / {len(today)}", "오늘 예정된 과제 기준", "#82c5a3", "✓"),
-            stat_card("다음 7일 계획", f"{minutes/60:.1f}h", f"전체 분야 · 주당 가용 {self.profile['weekly_hours']:g}h", "#70c4da", "◷"),
-            stat_card("이번 주 습관", str(habit_completions), "최근 7일의 수행 기록", "#e5bd67", "✦"),
-        ]
-        first_pair, second_pair = QHBoxLayout(), QHBoxLayout()
-        for pair, cards in ((first_pair, stats[:2]), (second_pair, stats[2:])):
-            pair.setSpacing(14)
-            for card in cards:
-                pair.addWidget(card, 1)
-        layout.addWidget(ResponsiveColumns(first_pair, second_pair, spacing=14, stretch=(1, 1)))
-        hero,hl=panel(True)
-        known=[state["value"] for g in goals if (state:=engine.progress_state(g,self.tasks))["value"] is not None]
-        avg=sum(known)/len(known) if known else 0
-        inside=row();copy=QVBoxLayout();copy.setSpacing(9)
-        copy.addWidget(label("YOUR NEXT MOVE","eyebrow"))
-        overdue=[t for t in tasks if not t["done"] and t.get("scheduled_date") and t["scheduled_date"]<date.today().isoformat()]
-        if overdue:headline=f"밀린 {len(overdue)}개의 과제, 다시 배치해 볼까요?";sub="완료한 기록을 보존하고 남은 시간에 맞춰 일정을 조정할 수 있습니다."
-        elif not goals:headline="지금의 나를 적고, 첫 목표를 정해 보세요.";sub="프로필 → 목표 → 로드맵 → 실행 기록으로 시작합니다."
-        else:headline="계획을 실행으로, 실행을 성장의 근거로.";sub="오늘의 과제와 결과를 기록하면 다음 계획의 기준이 됩니다."
-        copy.addWidget(label(headline,"sectionTitle",True));copy.addWidget(label(sub,"muted",True))
-        copy.addWidget(button("나의 성장 경로 확인  →",lambda:self.navigate("roadmap"),ghost=True),0,Qt.AlignmentFlag.AlignLeft)
-        if len(known)!=len(goals):copy.addWidget(label(f"진행도 계산 가능 {len(known)}/{len(goals)}개 · 정보 부족 목표는 평균에서 제외","muted",True))
-        inside.addLayout(copy,1);inside.addWidget(Ring(avg,"목표 평균 진행도"));hl.addLayout(inside);layout.addWidget(hero)
-        left=QVBoxLayout();left.setSpacing(14);self.section(left,"집중하고 있는 목표",button("모두 보기 →",lambda:self.navigate("goals"),ghost=True))
-        if goals:self.goal_grid(left,sorted(goals,key=lambda g:(g["status"]=="completed",-g["priority"],g["due_date"]))[:4])
-        else:self.empty(left,"성장 방향을 정할 차례","첫 목표를 등록하면 분야별 진행 상황이 여기에 표시됩니다.",button("첫 목표 만들기",self.edit_goal,True))
-        right=QVBoxLayout();right.setSpacing(14);self.section(right,"오늘의 실행",button("모두 보기 →",lambda:self.navigate("today"),ghost=True))
+    def page_dashboard(self, layout):
+        name = self.profile.get("name") or "나"
+        self.heading(layout, f"{name}의 성장 대시보드", "오늘의 실행과 목표의 흐름을 한눈에 확인하세요.", date.today().strftime("%Y.%m.%d  /  OVERVIEW"))
+        goals = self.filtered_goals()
+        goal_ids = {goal["id"] for goal in goals}
+        tasks = [task for task in self.tasks if task["goal_id"] in goal_ids]
+        active = [goal for goal in goals if goal["status"] != "completed"]
+        today = [task for task in tasks if task.get("scheduled_date") == date.today().isoformat()]
+        done = sum(task["done"] for task in today)
+        next_week = [task for task in self.tasks if task.get("scheduled_date") and date.today() <= date.fromisoformat(task["scheduled_date"]) <= date.today() + timedelta(days=6)]
+        minutes = sum(task["minutes"] for task in next_week)
+        self.stat_row(layout, [
+            stat_card("진행 중인 목표", str(len(active)), "선택한 분야의 목표", "#4f7ff3", "↗"),
+            stat_card("오늘의 실행", f"{done} / {len(today)}", "오늘 예정된 과제 중 완료", "#159f90", "✓"),
+            stat_card("다음 7일 계획", f"{minutes/60:.1f}h", f"전체 분야 · 주당 가용 {self.profile['weekly_hours']:g}h", "#8b6ae8", "◷"),
+            stat_card("달성한 목표", str(sum(goal["status"] == "completed" for goal in goals)), "직접 달성을 확인한 기록", "#d38b39", "✦"),
+        ])
+        chart, chart_content = panel()
+        chart_content.addLayout(row(label("최근 7일의 실행 흐름", "sectionTitle"), None,
+                                    button("성장 분석 ↗", lambda: self.navigate("analysis"), ghost=True)))
+        chart_content.addWidget(label("예정일별 과제 수와 그중 완료한 과제 수", "muted", True))
+        chart_content.addWidget(TrendChart(engine.activity_series(tasks)))
+        pace, pace_content = panel(True)
+        pace_content.addWidget(label("오늘의 페이스", "sectionTitle"))
         if today:
-            for t in sorted(today,key=lambda t:t["done"])[:3]:right.addWidget(self.task_row(t))
-        else:self.empty(right,"오늘 예정된 과제가 없습니다","로드맵 초안을 생성하거나 직접 실행 과제를 추가하세요.",button("실행 과제 추가",self.edit_task,ghost=True))
-        chart,cl=panel();cl.addWidget(label("최근 7일의 실행","sectionTitle"));cl.addWidget(label("연보라 완료  ·  회보라 계획  /  과제 수","muted"));cl.addWidget(ActivityChart(engine.activity_series(tasks)))
-        right.addWidget(chart);right.addStretch();left.addStretch()
-        layout.addWidget(ResponsiveColumns(left,right))
+            pace_content.addWidget(Ring(done / len(today), "오늘의 완료율", "#159f90"), 0, Qt.AlignmentFlag.AlignHCenter)
+            pace_content.addWidget(label(f"{len(today) - done}개 과제가 남아 있어요.", "summaryTitle", True))
+        else:
+            pace_content.addWidget(label("새로운 실행을 계획해 보세요.", "metricValue", True))
+            pace_content.addWidget(label("오늘 예정된 과제가 없습니다.", "muted", True))
+        overdue = [task for task in tasks if not task["done"] and task.get("scheduled_date") and task["scheduled_date"] < date.today().isoformat()]
+        pace_content.addWidget(label(f"지연 과제 {len(overdue)}개  ·  진행 중 목표 {len(active)}개", "muted", True))
+        pace_content.addStretch()
+        pace_content.addWidget(button("오늘의 실행 보기 →", lambda: self.navigate("today"), True))
+        left, right = QVBoxLayout(), QVBoxLayout()
+        left.addWidget(chart)
+        right.addWidget(pace)
+        layout.addWidget(ResponsiveColumns(left, right, stretch=(3, 1)))
+        self.section(layout, "집중하고 있는 목표", button("모든 목표 보기 →", lambda: self.navigate("goals"), ghost=True))
+        if goals:
+            self.goal_grid(layout, sorted(goals, key=lambda goal: (goal["status"] == "completed", -goal["priority"], goal["due_date"]))[:4])
+        else:
+            self.empty(layout, "첫 목표를 만들어 보세요", "현재 상태와 원하는 결과를 입력하면 성장 경로를 설계할 수 있습니다.", button("목표 만들기", self.edit_goal, True))
+        self.section(layout, "오늘의 실행", button("일정 전체 보기 →", lambda: self.navigate("today"), ghost=True))
+        if today:
+            for task in sorted(today, key=lambda task: task["done"])[:3]:
+                layout.addWidget(self.task_row(task))
+        else:
+            self.empty(layout, "오늘을 위한 작은 한 걸음", "계획한 목표에 실행 과제를 추가해 보세요.", button("실행 과제 추가", self.edit_task))
         if not self.goals:
-            layout.addWidget(button("가상 예시로 먼저 살펴보기",self.load_demo,ghost=True),0,Qt.AlignmentFlag.AlignLeft)
+            layout.addWidget(button("가상 예시로 먼저 살펴보기", self.load_demo, ghost=True), 0, Qt.AlignmentFlag.AlignLeft)
 
     def page_profile(self,layout):
-        self.heading(layout,"지금의 나를 이해하는 것부터.","입력한 사실과 자기평가를 구분해, 목표의 출발점을 기록합니다.","PROFILE & BASELINE")
+        self.heading(layout, "나의 프로필", "현재의 역량과 자원을 기록하고 성장의 출발점을 정하세요.", "PROFILE", button("프로필 저장", self.save_profile, True))
         self.profile_fields = {}
         tabs = self.profile_tabs = ProfileTabs()
         tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
@@ -320,8 +396,6 @@ class MainWindow(QMainWindow):
         tabs.setCurrentIndex(self.profile_tab)
         self.select_profile_tab(tabs.currentIndex())
         tabs.currentChanged.connect(self.select_profile_tab)
-        layout.addLayout(row(label("프로필은 내 PC와 내보낸 백업 파일에 저장됩니다.", "muted", True),
-                             None, button("프로필 저장", self.save_profile, True)))
         layout.addWidget(tabs)
         self.section(layout,"분야별 현재 상태",button("＋ 근거·측정값 기록",self.add_metric,ghost=True))
         grid=QGridLayout();grid.setSpacing(15)
@@ -352,7 +426,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(label(title, "sectionTitle", True))
         for key, caption, editor in fields:
             self.profile_fields[key] = editor
-            caption_label = label(caption, "muted", True)
+            caption_label = label(caption, "fieldLabel", True)
             if isinstance(editor, OptionalNumber):
                 caption_label.setBuddy(editor.known)
                 editor.known.setAccessibleName(f"{caption} 입력")
@@ -422,7 +496,7 @@ class MainWindow(QMainWindow):
         return self.profile_cards_tab(balances, cashflow, planned)
 
     def page_goals(self,layout):
-        self.heading(layout,"원하는 미래를, 확인 가능한 목표로.","결과물·수치·반복 목표를 나누고, 달성 여부를 직접 확인합니다.","GOALS & MILESTONES")
+        self.heading(layout, "목표 관리", "완료 기준을 정하고 다음 실행으로 연결하세요.", "GOALS & MILESTONES")
         search=QLineEdit(self.goal_search);search.setPlaceholderText("목표 이름 또는 완료 기준 검색…")
         search.returnPressed.connect(lambda:self.filter_search(search.text()))
         layout.addLayout(row(search,button("검색",lambda:self.filter_search(search.text())),button("＋ 새로운 목표",self.edit_goal,True)))
@@ -432,7 +506,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(label("진행도는 목표 기준의 변화 또는 준비 과제 완료 비율입니다. 과제를 모두 마친 뒤에도 최종 달성은 별도로 확인하세요.","muted",True))
 
     def page_roadmap(self,layout):
-        self.heading(layout,"목표에서 오늘까지, 이어지는 경로.","현재 근거·필요 조건·대안 시나리오를 검토한 뒤 단계별 계획을 실행 과제로 연결하세요.","GROWTH ROADMAP")
+        self.heading(layout, "성장 로드맵", "단계별 계획을 살펴보고 나에게 맞는 실행 속도를 정하세요.", "GROWTH ROADMAP")
         selected=goal_selector(self.filtered_goals())
         selected.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Fixed)
         selected.setMinimumWidth(250)
@@ -475,29 +549,48 @@ class MainWindow(QMainWindow):
         show_period(period_tabs.currentIndex())
 
     def roadmap_tasks(self, layout, tasks):
-        groups=defaultdict(list)
-        for t in sorted(tasks,key=lambda t:t.get("scheduled_date") or "9999"):
-            value=t.get("scheduled_date")
-            if not value:key="일정 미배정"
+        groups = defaultdict(list)
+        for task in sorted(tasks, key=lambda item: item.get("scheduled_date") or "9999"):
+            value = task.get("scheduled_date")
+            if not value:
+                key = "일정 미배정"
             else:
-                d=date.fromisoformat(value)
-                if self.roadmap_scale=="월간":key=f"{d:%Y년 %m월}"
-                elif self.roadmap_scale=="주간":key=f"{(d-timedelta(days=d.weekday())):%Y.%m.%d} 시작 주"
-                else:key=f"{d:%Y.%m.%d}"
-            groups[key].append(t)
-        if not tasks:self.empty(layout,"목표를 실행 단계로 나눠 보세요","목표와 프로필을 입력한 뒤 로드맵 초안을 생성하세요. 생성 결과를 확인한 다음 적용할 수 있습니다.")
-        for name,items in groups.items():
-            self.section(layout,name)
-            for t in sorted(items,key=lambda t:(t.get("scheduled_date") or "9999",t.get("position",0))):layout.addWidget(self.task_row(t))
+                day = date.fromisoformat(value)
+                if self.roadmap_scale == "월간":
+                    key = f"{day:%Y년 %m월}"
+                elif self.roadmap_scale == "주간":
+                    key = f"{(day - timedelta(days=day.weekday())):%Y.%m.%d} 시작 주"
+                else:
+                    key = f"{day:%Y.%m.%d}"
+            groups[key].append(task)
+        if not tasks:
+            self.empty(layout, "목표를 실행 단계로 나눠 보세요", "프로필과 목표를 입력한 뒤 실행할 로드맵을 설계할 수 있습니다.")
+        for index, (title, entries) in enumerate(groups.items(), 1):
+            card, content = panel()
+            card.setObjectName("timelineCard")
+            number_label = label(f"{index:02d}", "sectionIndex")
+            number_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            content.addLayout(row(number_label, label(title, "sectionTitle", True), None,
+                                  pill(f"{sum(task['done'] for task in entries)} / {len(entries)} 완료")))
+            for task in sorted(entries, key=lambda item: (item.get("scheduled_date") or "9999", item.get("position", 0))):
+                content.addWidget(self.task_row(task))
+            layout.addWidget(card)
 
     def page_today(self,layout):
-        self.heading(layout,"오늘의 작은 실행이, 다음 변화를 만듭니다.","예정 과제와 반복 습관을 확인하고 실제 수행 시간을 기록하세요.","DAILY PRACTICE")
-        editor=QDateEdit(QDate(self.execution_date.year,self.execution_date.month,self.execution_date.day));editor.setCalendarPopup(True);editor.setDisplayFormat("yyyy-MM-dd")
+        self.heading(layout, "오늘의 실행", "예정된 과제와 반복 습관을 확인하고 실행을 기록하세요.", "DAILY PRACTICE")
+        editor=QDateEdit(QDate(self.execution_date.year,self.execution_date.month,self.execution_date.day));editor.setCalendarPopup(True);editor.setDisplayFormat("yyyy-MM-dd");editor.setMinimumWidth(148)
         editor.dateChanged.connect(self.set_execution_date)
         layout.addLayout(row(editor,button("오늘",lambda:self.set_execution_date(QDate.currentDate())),None,button("＋ 습관",self.edit_habit),button("＋ 실행 과제",self.edit_task,True)))
         ds=self.execution_date.isoformat();ids={g["id"] for g in self.filtered_goals()}
         items=[t for t in self.tasks if t["goal_id"] in ids and t.get("scheduled_date")==ds]
-        self.section(layout,f"실행 과제  ·  {sum(t['done'] for t in items)} / {len(items)} 완료")
+        summary, summary_content = panel(True)
+        completed = sum(task["done"] for task in items)
+        summary_content.addLayout(row(label("선택한 날짜의 실행", "sectionTitle"), None,
+                                      pill(f"{completed} / {len(items)} 완료", "#159f90")))
+        summary_content.addWidget(progress_bar(completed / len(items) if items else 0, theme_colors()["accent"]))
+        summary_content.addWidget(label(f"예상 작업 시간 {sum(task['minutes'] for task in items) / 60:g}시간 · 남은 과제 {len(items) - completed}개", "muted", True))
+        layout.addWidget(summary)
+        self.section(layout, "실행 과제")
         for t in sorted(items,key=lambda t:(t["done"],t.get("position",0))):layout.addWidget(self.task_row(t))
         if not items:self.empty(layout,"이 날짜에 예정된 과제가 없습니다","로드맵에서 일정을 배치하거나 직접 과제를 추가할 수 있습니다.")
         if self.execution_date==date.today():
@@ -520,54 +613,151 @@ class MainWindow(QMainWindow):
             cl.addWidget(label(f"{days}  /  {h['minutes']}분 · "+("수행 예정일" if scheduled else "쉬는 날"),"muted"));layout.addWidget(card)
         if not self.habits:self.empty(layout,"꾸준함을 위한 작은 약속","반복할 요일과 필요한 시간을 정해 습관을 등록하세요.")
 
-    def page_analysis(self,layout):
-        self.heading(layout,"기록을 돌아보고, 다음 방향을 조정하세요.","실행량과 목표 성과를 구분합니다. 이 화면의 수치는 저장된 기록을 기준으로 계산합니다.","REFLECTION & INSIGHTS")
-        ids={g["id"] for g in self.filtered_goals()};tasks=[t for t in self.tasks if t["goal_id"] in ids]
-        w,l=panel();l.addLayout(row(label("최근 7일 · 계획과 실행","sectionTitle"),None,label("과제 수 · 연보라 완료 / 회보라 계획","muted")));l.addWidget(ActivityChart(engine.activity_series(tasks)));layout.addWidget(w)
-        self.section(layout,"분야별 목표 진행도")
-        grid=QGridLayout();grid.setSpacing(14)
-        for i,(key,c) in enumerate(CATEGORIES.items()):
-            if self.category!="all" and key!=self.category:continue
-            goals=[g for g in self.goals if g["category"]==key];known=[state["value"] for g in goals if (state:=engine.progress_state(g,self.tasks))["value"] is not None];p=sum(known)/len(known) if known else 0
-            card,cl=panel();cl.addLayout(row(pill(c["name"],c["color"]),None,label(f"{p:.0%}" if known else ("정보 부족" if goals else "목표 없음"))));cl.addWidget(progress_bar(p,c["color"]));cl.addWidget(label(f"목표 {len(goals)}개 중 {len(known)}개 계산 · 동일 가중 평균 · 역량 평가 점수 아님","muted",True));grid.addWidget(card,i//2,i%2)
+    def page_analysis(self, layout):
+        self.heading(layout, "성장 분석과 회고", "실행 기록을 돌아보고 다음 계획의 기준을 찾으세요.", "INSIGHTS & REFLECTION")
+        goals = self.filtered_goals()
+        goal_ids = {goal["id"] for goal in goals}
+        tasks = [task for task in self.tasks if task["goal_id"] in goal_ids]
+        series = engine.activity_series(tasks)
+        reviews = self.store.reviews()
+        known = [state["value"] for goal in goals if (state := engine.progress_state(goal, tasks))["value"] is not None]
+        self.stat_row(layout, [
+            stat_card("최근 7일 예정", str(sum(day["planned"] for day in series)), "예정일이 최근 7일인 과제", "#4f7ff3", "◷"),
+            stat_card("그중 완료한 과제", str(sum(day["completed"] for day in series)), "현재 완료 상태를 기준으로 집계", "#159f90", "✓"),
+            stat_card("분석 가능한 목표", f"{len(known)} / {len(goals)}", "진행도를 계산할 수 있는 목표", "#8b6ae8", "↗"),
+            stat_card("남긴 회고", str(len(reviews)), "분야 전체의 회고 기록", "#d38b39", "▤"),
+        ])
+        activity, activity_content = panel()
+        activity_content.addWidget(label("계획과 실행의 흐름", "sectionTitle"))
+        activity_content.addWidget(label("예정일별 과제 수와 그중 완료한 과제 수 · 최근 7일", "muted", True))
+        activity_content.addWidget(TrendChart(series))
+        categories, category_content = panel()
+        category_content.addWidget(label("분야별 목표 분포", "sectionTitle"))
+        category_content.addWidget(label("선택한 분야에 등록된 목표 개수", "muted", True))
+        category_content.addWidget(CategoryChart([
+            {"name": category["name"], "color": category["color"],
+             "value": sum(goal["category"] == key for goal in goals)}
+            for key, category in CATEGORIES.items() if self.category in {"all", key}
+        ]))
+        chart_column, category_column = QVBoxLayout(), QVBoxLayout()
+        chart_column.addWidget(activity)
+        category_column.addWidget(categories)
+        layout.addWidget(ResponsiveColumns(chart_column, category_column, stretch=(3, 1)))
+        self.section(layout, "목표 진행도")
+        grid = QGridLayout()
+        grid.setSpacing(14)
+        index = 0
+        for key, category in CATEGORIES.items():
+            if self.category not in {"all", key}:
+                continue
+            related = [goal for goal in goals if goal["category"] == key]
+            values = [state["value"] for goal in related if (state := engine.progress_state(goal, tasks))["value"] is not None]
+            average = sum(values) / len(values) if values else None
+            card, content = panel()
+            content.addLayout(row(pill(category["name"], category["color"]), None,
+                                  label(f"{average:.0%}" if average is not None else "정보 부족", "metricValue")))
+            content.addWidget(progress_bar(average or 0, category["color"]))
+            content.addWidget(label(f"목표 {len(related)}개 · 계산 가능 {len(values)}개 기준의 평균 진행도", "muted", True))
+            grid.addWidget(card, index // 2, index % 2)
+            index += 1
         layout.addLayout(grid)
-        self.section(layout,"나의 회고",button("＋ 회고 쓰기",self.add_review,ghost=True))
-        reviews=self.store.reviews()
-        for r in sorted(reviews,key=lambda r:r["date"],reverse=True)[:6]:
-            card,cl=panel();cl.addWidget(label(r["date"],"eyebrow"))
-            for title,key in [("잘한 점","good"),("어려웠던 점","challenge"),("다음 행동","next_action")]:
-                if r.get(key):cl.addWidget(label(f"{title}  ·  {r[key]}",wrap=True))
+        self.section(layout, "회고 노트", button("＋ 회고 쓰기", self.add_review))
+        for review in sorted(reviews, key=lambda item: item["date"], reverse=True)[:6]:
+            card, content = panel()
+            card.setObjectName("timelineCard")
+            content.addLayout(row(pill(review["date"]), None, label("나의 성장 기록", "muted")))
+            for title, key in (("잘한 점", "good"), ("어려웠던 점", "challenge"), ("다음 행동", "next_action")):
+                if review.get(key):
+                    content.addWidget(label(title, "summaryTitle"))
+                    content.addWidget(label(review[key], "muted", True))
             layout.addWidget(card)
-        if not reviews:self.empty(layout,"이번 실행에서 무엇을 배웠나요?","잘한 점, 어려웠던 점, 다음에 바꿀 행동을 기록하세요.")
-        history=self.store.history()
+        if not reviews:
+            self.empty(layout, "이번 실행에서 무엇을 배웠나요?", "잘한 점, 어려움, 다음에 바꿀 행동을 기록해 보세요.", button("첫 회고 작성", self.add_review))
+        history = self.store.history()
         if history:
-            self.section(layout,"최근 계획 변경")
-            for h in history[:5]:layout.addWidget(label(f"{h['created_at'][:16]}  ·  {h['summary']}","muted",True))
+            self.section(layout, "최근 계획 변경")
+            for item in history[:5]:
+                card, content = panel()
+                content.setContentsMargins(16, 12, 16, 12)
+                content.addLayout(row(pill(item["created_at"][:10]), label(item["summary"], "muted", True), None))
+                layout.addWidget(card)
 
-    def page_coach(self,layout):
-        self.heading(layout,"기록에 근거한 제안, 선택은 당신에게.","현재 버전은 규칙 기반 코치입니다. 외부 생성형 AI와 자동 자료 검색은 연결하지 않았습니다.","COACHING ROOM")
-        layout.addLayout(row(pill("규칙 기반 코치","#82c5a3"),pill("외부 AI 미연결","#e5bd67"),None))
-        for g in self.filtered_goals()[:3]:
-            report=analyze_goal(g,self.profile,self.metrics,self.tasks,self.habits,self.goals)
-            card,cl=panel();cl.addWidget(label(g["title"],"sectionTitle",True));cl.addWidget(label(report["summary"],"muted",True));cl.addWidget(label(f"추가 확인 {len(report['missing'])}건 · 조건·위험 {len(report['warnings'])}건",wrap=True));cl.addWidget(button("상세 진단·시나리오·단계별 로드맵",lambda goal=g:self.show_goal_analysis(goal),ghost=True),0,Qt.AlignmentFlag.AlignLeft);layout.addWidget(card)
-        for insight in engine.insights(self.profile,self.goals,self.tasks,self.metrics,self.habits):
-            card,cl=panel();cl.addWidget(label(insight["title"],"sectionTitle",True));cl.addWidget(label(insight["body"],"muted",True));layout.addWidget(card)
-        actions,al=panel();al.addWidget(label("추천을 다음 계획으로 연결하기","sectionTitle"));al.addWidget(label("기존 완료 기록을 남기고, 현재 가용 시간 안에서 미완료 과제의 새 일정을 미리 확인합니다.","muted",True));al.addWidget(button("계획 수정안 보기",lambda:self.plan(True),True),0,Qt.AlignmentFlag.AlignLeft);layout.addWidget(actions)
-        external,el=panel();el.addWidget(label("외부 상담과 자료 확인","sectionTitle"));el.addWidget(label("목표·실행 현황을 요약해 복사하거나 브라우저에서 자료를 직접 확인할 수 있습니다. 검색 결과를 검증된 근거로 자동 등록하지 않습니다.","muted",True))
-        self.include_profile=QCheckBox("프로필도 포함 (금융·자산 및 커리어 상세 정보)");el.addWidget(self.include_profile)
-        search=QLineEdit();search.setPlaceholderText("직무·시험명 등 확인할 자료 입력")
-        el.addLayout(row(button("상담용 요약 복사",self.copy_coaching),search,button("브라우저 검색 ↗",lambda:self.open_search(search.text()))));layout.addWidget(external)
+    def page_coach(self, layout):
+        self.heading(layout, "나의 성장 코치", "저장된 기록을 바탕으로 다음 행동을 점검하세요.", "COACHING ROOM")
+        intro, intro_content = panel(True)
+        intro_content.addLayout(row(pill("규칙 기반 코치", "#159f90"), None, label("외부 AI 미연결", "muted")))
+        intro_content.addWidget(label("지금 막힌 곳부터, 다음 한 걸음으로.", "summaryTitle", True))
+        intro_content.addWidget(label("목표의 부족한 정보와 실행 조건을 확인하고, 일정 변경안을 직접 검토할 수 있습니다.", "muted", True))
+        intro_content.addWidget(button("계획 수정안 살펴보기 →", lambda: self.plan(True), True), 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(intro)
+        self.section(layout, "목표별 점검")
+        grid = QGridLayout()
+        grid.setSpacing(14)
+        goals = self.filtered_goals()[:3]
+        for index, goal in enumerate(goals):
+            report = analyze_goal(goal, self.profile, self.metrics, self.tasks, self.habits, self.goals)
+            card, content = panel()
+            category = CATEGORIES[goal["category"]]
+            content.addLayout(row(pill(category["name"], category["color"]), None,
+                                  label(f"확인할 정보 {len(report['missing'])}건", "muted")))
+            content.addWidget(label(goal["title"], "sectionTitle", True))
+            content.addWidget(label(report["summary"], "muted", True))
+            content.addWidget(label(f"조건과 위험 점검 {len(report['warnings'])}건", "muted", True))
+            content.addWidget(button("상세 진단 보기 →", lambda item=goal: self.show_goal_analysis(item)))
+            grid.addWidget(card, index // 2, index % 2)
+        layout.addLayout(grid)
+        self.section(layout, "기록에서 찾은 점검 노트")
+        for index, insight in enumerate(engine.insights(self.profile, self.goals, self.tasks, self.metrics, self.habits), 1):
+            card, content = panel()
+            heading = row(pill(f"{index:02d}", "#d38b39" if insight["kind"] == "warning" else "#4f7ff3"),
+                          label(insight["title"], "sectionTitle", True), None)
+            content.addLayout(heading)
+            content.addWidget(label(insight["body"], "muted", True))
+            layout.addWidget(card)
+        external, external_content = panel()
+        external_content.addWidget(label("상담과 자료 확인", "sectionTitle"))
+        external_content.addWidget(label("현재 기록을 상담용으로 복사하거나, 브라우저에서 목표에 필요한 자료를 찾아보세요.", "muted", True))
+        self.include_profile = QCheckBox("프로필도 포함 (금융·자산 및 커리어 상세 정보)")
+        external_content.addWidget(self.include_profile)
+        external_content.addWidget(button("상담용 요약 복사", self.copy_coaching), 0, Qt.AlignmentFlag.AlignLeft)
+        search = QLineEdit()
+        search.setPlaceholderText("확인할 직무·시험·학습 자료")
+        external_content.addLayout(row(search, button("브라우저 검색 ↗", lambda: self.open_search(search.text()))))
+        layout.addWidget(external)
 
-    def page_settings(self,layout):
-        self.heading(layout,"나의 데이터, 나의 작업 공간.","기록을 백업하고 다른 PC에서 복원하세요. 백업 복원은 현재 데이터를 교체합니다.","PREFERENCES")
-        w,l=panel();l.addWidget(label("화면과 알림","sectionTitle"))
-        light=QCheckBox("밝은 테마 사용");light.setChecked(self.preferences.value("light",False,type=bool));light.toggled.connect(self.set_light);l.addWidget(light)
-        notifications=QCheckBox("앱 실행 중 오늘의 미완료 과제 알림");notifications.setChecked(self.preferences.value("notifications",False,type=bool));notifications.toggled.connect(lambda v:self.preferences.setValue("notifications",v));l.addWidget(notifications)
-        l.addWidget(label("알림은 앱 실행 중에만 확인합니다. 완전 종료·절전 상태에서는 동작하지 않습니다.","muted",True));layout.addWidget(w)
-        b,bl=panel();bl.addWidget(label("백업 · 다른 PC로 이동","sectionTitle"));bl.addWidget(label("DB와 첨부 파일을 .pgmbackup 파일로 내보냅니다. 백업은 암호화되지 않으므로 보관 위치를 직접 관리하세요. 복원 전 현재 데이터의 자동 백업을 생성합니다.","muted",True));bl.addLayout(row(button("백업 내보내기",self.export_backup,True),button("백업에서 복원",self.restore_backup),None));layout.addWidget(b)
-        info,il=panel();il.addWidget(label("저장 위치와 프로토타입 범위","sectionTitle"));il.addWidget(label(str(self.store.data_dir),"muted",True));il.addWidget(label("SQLite 로컬 저장 · 별도 운영 서버 없음 · 외부 AI/API 키 미설정 · 기기 간 자동 병합 없음",wrap=True));il.addWidget(button("데이터 폴더 열기 ↗",lambda:QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.store.data_dir)))),0,Qt.AlignmentFlag.AlignLeft);layout.addWidget(info)
+    def page_settings(self, layout):
+        self.heading(layout, "작업 공간 설정", "화면, 알림, 백업을 내 사용 방식에 맞게 관리하세요.", "PREFERENCES")
+        appearance, appearance_content = panel()
+        appearance.setObjectName("settingsSection")
+        appearance_content.addWidget(label("화면과 알림", "sectionTitle"))
+        appearance_content.addWidget(label("매일 쓰기 편한 작업 공간을 만들어 보세요.", "muted", True))
+        light = QCheckBox("밝은 테마 사용")
+        light.setChecked(self.preferences.value("light", True, type=bool))
+        light.toggled.connect(self.set_light)
+        appearance_content.addWidget(light)
+        notifications = QCheckBox("앱 실행 중 오늘의 미완료 과제 알림")
+        notifications.setChecked(self.preferences.value("notifications", False, type=bool))
+        notifications.toggled.connect(lambda value: self.preferences.setValue("notifications", value))
+        appearance_content.addWidget(notifications)
+        appearance_content.addWidget(label("완전 종료·절전 중에는 알림이 표시되지 않습니다.", "muted", True))
+        backups, backup_content = panel()
+        backups.setObjectName("settingsSection")
+        backup_content.addWidget(label("백업과 데이터 이동", "sectionTitle"))
+        backup_content.addWidget(label("기록과 첨부 파일을 묶어 다른 PC로 옮기세요. 복원 시 현재 데이터를 교체하고, 교체 전 기록을 자동 백업합니다.", "muted", True))
+        backup_content.addWidget(pill("백업 파일은 암호화되지 않습니다.", "#d38b39"), 0, Qt.AlignmentFlag.AlignLeft)
+        backup_content.addWidget(button("백업 내보내기", self.export_backup, True))
+        backup_content.addWidget(button("백업에서 복원", self.restore_backup))
+        left, right = QVBoxLayout(), QVBoxLayout()
+        left.addWidget(appearance)
+        right.addWidget(backups)
+        layout.addWidget(ResponsiveColumns(left, right, stretch=(1, 1)))
+        storage, storage_content = panel()
+        storage_content.addWidget(label("내 데이터 보관 위치", "sectionTitle"))
+        storage_content.addWidget(label(str(self.store.data_dir), "muted", True))
+        storage_content.addWidget(button("데이터 폴더 열기 ↗", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.store.data_dir)))), 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(storage)
         if not self.goals:
-            self.empty(layout,"실제 입력 전에 살펴보기","빈 작업 공간에만 가상 예시를 불러옵니다. 실제 사용은 별도 데이터 폴더에서 시작할 수 있습니다.",button("가상 예시 불러오기",self.load_demo))
+            self.empty(layout, "실제 입력 전에 살펴보기", "빈 작업 공간에 가상 예시를 불러와 화면을 살펴볼 수 있습니다.", button("가상 예시 불러오기", self.load_demo))
 
     def edit_goal(self,goal=None):
         dialog=GoalDialog(goal,self)
@@ -697,7 +887,12 @@ class MainWindow(QMainWindow):
         if text.strip():QDesktopServices.openUrl(QUrl("https://www.google.com/search?q="+quote(text.strip())))
 
     def set_light(self,value):
-        self.preferences.setValue("light",value);apply_theme(QApplication.instance(),value)
+        self.preferences.setValue("light", value)
+        apply_theme(QApplication.instance(), value)
+        refresh_accents(self)
+        for key, item in self.nav.items():
+            color = theme_colors()["accent"] if key == self.page_key else theme_colors()["muted"]
+            item.setIcon(ui_icon(key, color))
 
     def load_demo(self):
         if QMessageBox.question(self,"가상 예시 불러오기","모든 이름·금액·성과가 가상인 예시를 빈 작업 공간에 추가할까요?")!=QMessageBox.StandardButton.Yes:return

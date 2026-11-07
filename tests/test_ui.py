@@ -366,6 +366,7 @@ class DesktopIntegrationTests(unittest.TestCase):
         self.assert_no_guard_error()
 
     def test_theme_preference_and_selected_execution_date(self):
+        self.window.set_light(False)
         old_style = self.app.styleSheet()
         self.window.set_light(True)
         self.assertTrue(self.window.preferences.value("light", False, type=bool))

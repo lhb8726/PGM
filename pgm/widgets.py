@@ -3,8 +3,10 @@
 import re
 
 from PySide6.QtCore import Qt, QRectF
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPalette
 from PySide6.QtWidgets import QBoxLayout, QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+
+from .theme import theme_colors
 
 
 _SOFT_BREAK = "\u200b"
@@ -96,10 +98,33 @@ class CheckBoxLabel(WrappingLabel):
 
 def pill(text,color="#b69af7"):
     w = label(text)
-    r,g,b,_=QColor(color).getRgb()
-    w.setStyleSheet(f"color:{color}; background:rgba({r},{g},{b},20); border:1px solid rgba({r},{g},{b},48); border-radius:8px; padding:4px 8px; font-size:10px;")
-    w.setFixedHeight(25)
+    w.setProperty("accentColor", color)
+    _style_accent(w)
+    w.setFixedHeight(27)
     return w
+
+
+def _style_accent(widget):
+    foreground, background = _accent_colors(widget.property("accentColor"))
+    decoration = ("border-radius:11px; font-size:16px; font-weight:650; padding:0;"
+                  if widget.objectName() == "statIcon"
+                  else "border-radius:8px; padding:4px 9px; font-size:11px; font-weight:600;")
+    widget.setStyleSheet(f"color:{foreground}; background:{background}; border:none; {decoration}")
+
+
+def refresh_accents(root):
+    for widget in root.findChildren(QLabel):
+        if widget.property("accentColor"):
+            _style_accent(widget)
+
+
+def _accent_colors(value):
+    color = QColor(value)
+    light = QColor(theme_colors()["bg"]).lightness() > 128
+    foreground = color.darker(180) if light else color.lighter(160)
+    red, green, blue, _ = color.getRgb()
+    background = f"rgba({red},{green},{blue},{28 if light else 42})"
+    return foreground.name(), background
 
 
 class Ring(QWidget):
@@ -109,23 +134,27 @@ class Ring(QWidget):
         self.caption=caption
         self.color=color
         self.setFixedSize(112,126)
+        self.setAccessibleName(f"{caption} {self.value:.0%}")
 
     def paintEvent(self,event):
         p=QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect=QRectF(13,5,86,86)
-        p.setPen(QPen(QColor("#343a4c"),7))
+        p.setPen(QPen(self.palette().color(QPalette.ColorRole.Midlight),7))
         p.drawArc(rect,0,360*16)
-        pen=QPen(QColor(self.color),7)
+        accent = self.palette().color(QPalette.ColorRole.Highlight)
+        if self.color != "#b69af7":
+            accent = QColor(_accent_colors(self.color)[0])
+        pen=QPen(accent,7)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         p.setPen(pen)
         p.drawArc(rect,90*16,-round(360*16*self.value))
         p.setPen(self.palette().windowText().color())
-        font=QFont(self.font());font.setPixelSize(23);font.setBold(True)
+        font=QFont(self.font());font.setPixelSize(25);font.setBold(True)
         p.setFont(font)
         p.drawText(rect,Qt.AlignmentFlag.AlignCenter,f"{self.value:.0%}")
-        font.setPixelSize(10);font.setBold(False);p.setFont(font)
-        p.setPen(QColor("#9ca7bb"))
+        font.setPixelSize(11);font.setBold(False);p.setFont(font)
+        p.setPen(self.palette().color(QPalette.ColorRole.PlaceholderText))
         p.drawText(QRectF(0,99,112,24),Qt.AlignmentFlag.AlignCenter,self.caption)
 
 
@@ -138,27 +167,49 @@ class ActivityChart(QWidget):
 
     def paintEvent(self,event):
         p=QPainter(self);p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w=self.width();h=self.height();left=29;top=20;bottom=h-30
+        w=self.width();h=self.height();top=20;bottom=h-30
         maxval=max([x.get("planned",0) for x in self.series]+[x.get("completed",0) for x in self.series]+[1])
-        p.setFont(QFont(self.font().family(),9))
-        for frac in [0,.5,1]:
-            y=bottom-(bottom-top)*frac
-            p.setPen(QPen(QColor("#343b4b"),.6))
+        font = QFont(self.font())
+        font.setPixelSize(11)
+        p.setFont(font)
+        left=max(29,p.fontMetrics().horizontalAdvance(str(maxval))+12)
+        grid = self.palette().color(QPalette.ColorRole.Mid)
+        muted = self.palette().color(QPalette.ColorRole.PlaceholderText)
+        planned = self.palette().color(QPalette.ColorRole.Midlight)
+        completed = self.palette().color(QPalette.ColorRole.Highlight)
+        for tick in sorted({0, round(maxval / 2), maxval}):
+            y=bottom-(bottom-top)*tick/maxval
+            p.setPen(QPen(grid,.8))
             p.drawLine(left,int(y),w-8,int(y))
-            p.setPen(QColor("#9ca7bb"));p.drawText(0,int(y)-7,25,15,Qt.AlignmentFlag.AlignRight,str(round(maxval*frac)))
+            p.setPen(muted)
+            p.drawText(0,int(y)-8,left-8,16,Qt.AlignmentFlag.AlignRight,str(tick))
         n=max(1,len(self.series));slot=(w-left-12)/n;bar=min(19,slot*.28)
         for i,item in enumerate(self.series):
             x=left+slot*(i+.5)
-            for off,key,color in [(-bar-2,"planned","#42415e"),(2,"completed","#b69af7")]:
+            for off,key,color in [(-bar-2,"planned",planned),(2,"completed",completed)]:
                 height=(bottom-top)*item.get(key,0)/maxval
-                p.setPen(Qt.PenStyle.NoPen);p.setBrush(QColor(color))
-                p.drawRoundedRect(QRectF(x+off,bottom-height,bar,max(2,height)),3,3)
-            p.setPen(QColor("#9ca7bb"))
+                if height > 0:
+                    p.setPen(Qt.PenStyle.NoPen);p.setBrush(color)
+                    p.drawRoundedRect(QRectF(x+off,bottom-height,bar,max(2,height)),3,3)
+            p.setPen(muted)
             p.drawText(QRectF(x-slot/2,bottom+7,slot,20),Qt.AlignmentFlag.AlignCenter,str(item.get("label","")))
 
 
 def stat_card(title,value,detail,color="#b69af7",icon="◈"):
     w,layout=panel()
-    top=QHBoxLayout();top.addWidget(label(title,"muted",True),1);top.addWidget(pill(icon,color))
-    layout.addLayout(top);layout.addWidget(label(value,"statValue",True));layout.addWidget(label(detail,"muted",True))
+    w.setObjectName("statCard")
+    layout.setContentsMargins(18,17,18,17)
+    layout.setSpacing(10)
+    badge = label(icon, "statIcon")
+    badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    badge.setFixedSize(34,34)
+    badge.setProperty("accentColor", color)
+    _style_accent(badge)
+    top=QHBoxLayout()
+    top.setSpacing(10)
+    top.addWidget(label(title,"muted",True),1)
+    top.addWidget(badge)
+    layout.addLayout(top)
+    layout.addWidget(label(value,"statValue",True))
+    layout.addWidget(label(detail,"muted",True))
     return w

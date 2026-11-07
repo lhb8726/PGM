@@ -9,33 +9,42 @@ from PySide6.QtCore import QTimer, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QDialog, QFileDialog, QHBoxLayout, QHeaderView, QMessageBox, QPushButton,
-    QScrollArea, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QScrollArea, QSizePolicy, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from .analysis import report_markdown
 from .dialogs import _fit_to_screen
-from .widgets import label, panel, pill
+from .widgets import ResponsiveColumns, label, panel, pill
 
 
 STATUS_LABELS = {"needs_input": "추가 정보 필요", "conditional": "조건부 계획", "at_risk": "조건 조정 필요", "completed": "완료 확인", "on_track": "입력 조건 검토"}
 
 
 def _scroll():
-    area = QScrollArea();area.setWidgetResizable(True)
-    body = QWidget();layout = QVBoxLayout(body);layout.setContentsMargins(16,20,16,20);layout.setSpacing(16)
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    body = QWidget()
+    body.setObjectName("reportBody")
+    layout = QVBoxLayout(body)
+    layout.setContentsMargins(10, 16, 10, 18)
+    layout.setSpacing(18)
     area.setWidget(body)
     return area,layout
 
 
 def wrapped_table(headers, rows, *, compact_columns=(), minimum_height_cap=470):
     table = QTableWidget(len(rows), len(headers))
+    table.setObjectName("reportTable")
     table.setHorizontalHeaderLabels(headers)
     table.setWordWrap(True)
+    table.setAlternatingRowColors(True)
+    table.setShowGrid(False)
     table.setTextElideMode(Qt.TextElideMode.ElideNone)
     table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
     table.setVerticalScrollMode(QTableWidget.ScrollMode.ScrollPerPixel)
     table.verticalHeader().setVisible(False)
     header = table.horizontalHeader()
+    header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
     header.ensurePolished()
     header.setMinimumSectionSize(max((header.sectionSizeHint(column) for column in range(len(headers))), default=0))
     header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -68,18 +77,45 @@ class GoalAnalysisDialog(QDialog):
         super().__init__(parent)
         self.report=report;self.plan=plan
         self.setWindowTitle("목표 분석 · 상세 성장 로드맵")
+        self.setObjectName("analysisDialog")
         self.setMinimumSize(560,420);self.resize(1060,850)
-        layout=QVBoxLayout(self);layout.setContentsMargins(25,24,25,20);layout.setSpacing(13)
-        layout.addWidget(label(report["title"],"sectionTitle",True))
-        tags=QHBoxLayout();tags.addWidget(pill(STATUS_LABELS.get(report.get("status"),"조건 확인")))
-        tags.addWidget(pill("규칙 기반 분석 · 외부 AI 미연결","#82c5a3"));tags.addStretch()
-        tags.addWidget(label(f"분석 기준 {report.get('generated_on','')}","muted"));layout.addLayout(tags)
-        self.tabs=QTabWidget();layout.addWidget(self.tabs,1)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 18)
+        layout.setSpacing(16)
+        header, heading = panel()
+        header.setObjectName("dialogHeader")
+        heading.setContentsMargins(18, 16, 18, 16)
+        heading.setSpacing(10)
+        metadata = QHBoxLayout()
+        metadata.addWidget(label("목표 분석", "eyebrow"))
+        metadata.addStretch()
+        metadata.addWidget(label(f"분석 기준 {report.get('generated_on','')}", "muted"))
+        heading.addLayout(metadata)
+        heading.addWidget(label(report["title"], "dialogTitle", True))
+        tags = QHBoxLayout()
+        tags.setSpacing(8)
+        tags.addWidget(pill(STATUS_LABELS.get(report.get("status"), "조건 확인"), "#3974d8"))
+        tags.addWidget(pill("규칙 기반 분석 · 외부 AI 미연결", "#218b86"))
+        tags.addStretch()
+        heading.addLayout(tags)
+        header_area = QScrollArea()
+        header_area.setObjectName("analysisHeader")
+        header_area.setWidgetResizable(True)
+        header_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        header_area.setMinimumHeight(110)
+        header_area.setMaximumHeight(180)
+        header_area.setWidget(header)
+        layout.addWidget(header_area)
+        self.tabs = QTabWidget()
+        self.tabs.setObjectName("reportTabs")
+        layout.addWidget(self.tabs, 1)
         area,body=_scroll();self.tabs.addTab(area,"진단·시나리오")
-        body.addWidget(label(report.get("summary",""),wrap=True))
+        summary, summary_layout = panel()
+        summary_layout.addWidget(label(report.get("summary", ""), "recordTitle", True))
+        body.addWidget(summary)
         self._list(body,"입력된 사실·기록",report.get("facts",[]))
-        if report.get("missing"):self._list(body,"먼저 확인할 정보",report["missing"],"#e5bd67")
-        if report.get("warnings"):self._list(body,"제약·위험·조건 조정",report["warnings"],"#df9ab1")
+        if report.get("missing"):self._list(body,"먼저 확인할 정보",report["missing"],"warning")
+        if report.get("warnings"):self._list(body,"제약·위험·조건 조정",report["warnings"],"danger")
         scenarios=report.get("scenarios",[])
         if scenarios:
             body.addWidget(label("조건을 바꾸면 달라지는 결과","sectionTitle"))
@@ -118,7 +154,7 @@ class GoalAnalysisDialog(QDialog):
         body.addStretch()
         area,body=_scroll();self.tabs.addTab(area,"가까운 실행 계획")
         body.addWidget(label(plan.get("summary",""),"muted",True))
-        self._list(body,"배치 조건·추가 확인",plan.get("warnings",[]),"#e5bd67")
+        self._list(body,"배치 조건·추가 확인",plan.get("warnings",[]),"warning")
         tasks=plan.get("tasks",[])
         if tasks:
             body.addWidget(wrapped_table(["예정 날짜","실행 과제","초기 예상","완료 기준"],[[t.get("scheduled_date") or "미배정",t["title"],f"{t['minutes']}분",t.get("done_when","")] for t in tasks],compact_columns=(0,2)))
@@ -135,22 +171,42 @@ class GoalAnalysisDialog(QDialog):
             body.addWidget(card)
         if not report.get("sources"):body.addWidget(label("등록된 근거 링크가 없습니다. 공식 기준이나 평가 자료를 목표에 추가해 주세요.","muted",True))
         body.addStretch()
-        footer=QHBoxLayout()
-        export=QPushButton("보고서 저장");export.clicked.connect(self.export);footer.addWidget(export)
-        edit=QPushButton("목표·분석 조건 수정");edit.clicked.connect(lambda:self.done(2));footer.addWidget(edit);footer.addStretch()
-        close=QPushButton("닫기");close.clicked.connect(self.reject);footer.addWidget(close)
-        self.apply_button=QPushButton(f"실행 과제 {len(tasks)}개 추가");self.apply_button.setObjectName("primary");self.apply_button.setEnabled(bool(tasks));self.apply_button.clicked.connect(self.accept);footer.addWidget(self.apply_button)
-        layout.addLayout(footer)
+        secondary = QHBoxLayout()
+        secondary.setSpacing(10)
+        export = QPushButton("보고서 저장")
+        export.clicked.connect(self.export)
+        secondary.addWidget(export)
+        edit = QPushButton("목표·분석 조건 수정")
+        edit.setObjectName("subtle")
+        edit.clicked.connect(lambda: self.done(2))
+        secondary.addWidget(edit)
+        secondary.addStretch()
+        primary = QHBoxLayout()
+        primary.setSpacing(10)
+        primary.addStretch()
+        close = QPushButton("닫기")
+        close.setObjectName("subtle")
+        close.clicked.connect(self.reject)
+        primary.addWidget(close)
+        self.apply_button = QPushButton(f"실행 과제 {len(tasks)}개 추가")
+        self.apply_button.setObjectName("primary")
+        self.apply_button.setEnabled(bool(tasks))
+        self.apply_button.clicked.connect(self.accept)
+        primary.addWidget(self.apply_button)
+        footer = ResponsiveColumns(secondary, primary, spacing=10, stretch=(1, 1))
+        footer.setObjectName("dialogFooter")
+        layout.addWidget(footer)
 
     def showEvent(self, event):
         _fit_to_screen(self)
         super().showEvent(event)
 
     @staticmethod
-    def _list(layout,title,items,color=None):
+    def _list(layout,title,items,tone=None):
         if not items:return
         card,cl=panel();heading=label(title,"sectionTitle")
-        if color:heading.setStyleSheet(f"color:{color}")
+        if tone:
+            card.setProperty("tone", tone)
         cl.addWidget(heading)
         for text in items:cl.addWidget(label("• "+str(text),"muted",True))
         layout.addWidget(card)
